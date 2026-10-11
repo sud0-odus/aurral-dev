@@ -1,0 +1,18 @@
+[Unit]
+Description=Aurral Apple Music Auth POC (temporary)
+After=network-online.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/aurral-dev/apple-poc/aurral-apple-poc.py
+WorkingDirectory=/opt/aurral-dev
+Restart=on-failure
+RestartSec=2
+User=root
+Environment=APPLE_POC_HOST=0.0.0.0
+Environment=APPLE_POC_PORT=3333
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target
