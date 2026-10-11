@@ -22,7 +22,7 @@ import {
   restoreDownloadJobCancellations,
 } from "../../../services/downloadJobs/downloadCancellation.js";
 
-async function createOrImportStaticPlaylist(req, res, { requireTracks, label }) {
+async function createOrImportStaticPlaylist(req, res, { requireTracks, label, successHtml = false }) {
   const {
     name,
     sourceName = null,
@@ -61,6 +61,11 @@ async function createOrImportStaticPlaylist(req, res, { requireTracks, label }) 
     ownerUserId: req.user.id,
   });
 
+  // APPLE_PHASE4_SUCCESS_V1: only the Apple confirmation form requests HTML.
+  if (successHtml) {
+    const content = `<p>Apple Music playlist <b>${htmlEscape(safeName)}</b> was accepted.</p><p><b>${normalizedTracks.length} tracks</b> have been queued in Aurral.</p><p>Operation ID: ${result.operationId}</p><p><a href="/">Open Aurral</a> to view playlists and download progress.</p><p>You can close this tab or return to the Apple Music POC for another playlist.</p>`;
+    return res.set("Cache-Control", "no-store").type("html").send(appleImportPage("Apple Music import queued", content));
+  }
   return res.json({
     success: true,
     playlistId,
@@ -100,7 +105,69 @@ async function enqueueBulkAction(req, res, action) {
   return res.json({ ...result, acceptedJobIds: selections.map((selection) => selection.jobId), rejected });
 }
 
+// APPLE_IMPORT_BRIDGE_V1: import only in Aurral's authenticated user context.
+// The Apple POC is contacted server-to-server on loopback. No browser cookies are forwarded.
+import https from "node:https";
+
+const APPLE_ID = /^pl\.[A-Za-z0-9_.-]{1,100}$/;
+function htmlEscape(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
+}
+function appleExport(playlistId, name) {
+  return new Promise((resolve, reject) => {
+    const qs = new URLSearchParams({id: playlistId, name});
+    const req = https.get({hostname:"127.0.0.1",port:3333,path:`/api/export?${qs}`,
+      // Local POC uses a self-signed development certificate; restrict exception to loopback.
+      rejectUnauthorized:false,timeout:30000}, (res) => {
+      let buffer="";
+      res.setEncoding("utf8");
+      res.on("data", chunk => {buffer+=chunk;if(buffer.length>1024*1024)res.destroy(new Error("Apple response too large"));});
+      res.on("end", () => {
+        if(res.statusCode!==200) return reject(new Error(`Apple POC HTTP ${res.statusCode}`));
+        try { resolve(JSON.parse(buffer)); } catch (err) { reject(err); }
+      });
+      res.on("error",reject);
+    });
+    req.on("timeout",()=>req.destroy(new Error("Apple POC timeout")));
+    req.on("error",reject);
+  });
+}
+function appleImportPage(title, content) {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)}</title><style>body{font:16px system-ui;max-width:700px;margin:4rem auto;padding:1rem;background:#141820;color:#fff}button{background:#d94462;border:0;color:#fff;padding:12px 20px;cursor:pointer;border-radius:6px}a{color:#a5d5ff}li{margin:6px 0}</style><h1>${htmlEscape(title)}</h1>${content}</html>`;
+}
+function appleParams(req) {
+  const playlistId=String(req.query.id||req.body?.id||"");
+  const name=String(req.query.name||req.body?.name||"Apple Music Playlist").trim().slice(0,120);
+  if(!APPLE_ID.test(playlistId)||!name) return null;
+  return {playlistId,name};
+}
+
 export function registerStaticPlaylists(router) {
+  // Aurral-owned confirmation flow; requireAuth/accessFlow already applied by parent router.
+  router.get("/shared-playlists/apple-import", async (req, res) => {
+    const args=appleParams(req);
+    if(!args) return res.status(400).send("Invalid Apple playlist");
+    try {
+      const payload=await appleExport(args.playlistId,args.name);
+      const tracks=Array.isArray(payload.tracks)?payload.tracks:[];
+      if(!tracks.length) return res.status(422).send("No tracks returned from Apple POC");
+      const body=`<p>Signed in to Aurral. Preview the Apple playlist before importing.</p><p><b>${htmlEscape(args.name)}</b> — ${tracks.length} tracks</p><ol>${tracks.slice(0,30).map(t=>`<li>${htmlEscape(t.artistName)} — ${htmlEscape(t.trackName)}</li>`).join("")}</ol>${tracks.length>30?"<p>Showing first 30 tracks.</p>":""}<form method="post" action="/api/playlists/shared-playlists/apple-import?id=${encodeURIComponent(args.playlistId)}&amp;name=${htmlEscape(encodeURIComponent(args.name))}"><button type="submit">Confirm import into Aurral</button></form><p>Existing JSON export remains available in the Apple POC.</p>`;
+      res.set("Cache-Control","no-store").type("html").send(appleImportPage("Import Apple Music playlist",body));
+    } catch(err) {res.status(502).type("html").send(appleImportPage("Apple connection unavailable","<p>Reconnect in the Apple POC and retry. No playlist was created.</p>"));}
+  });
+  router.post("/shared-playlists/apple-import", async (req,res) => {
+    const args=appleParams(req);
+    if(!args) return res.status(400).send("Invalid Apple playlist");
+    try {
+      const payload=await appleExport(args.playlistId,args.name);
+      if(!Array.isArray(payload.tracks)||!payload.tracks.length) return res.status(422).send("No tracks returned");
+      req.body={name:args.name,sourceName:"Apple Music",tracks:payload.tracks};
+      // Exact same owner-scoped queue and validation as the existing JSON import.
+      const result=await createOrImportStaticPlaylist(req,res,{requireTracks:true,label:"shared-playlist:apple-import",successHtml:true});
+      return result;
+    } catch(err) { return res.status(502).json({error:"Apple import unavailable",message:"Reconnect Apple POC and retry. No import queued."}); }
+  });
+
   for (const [path, action] of [["track-removals", "remove"], ["track-moves", "move"]]) {
     router.post(`/shared-playlists/:playlistId/${path}`, async (req, res) => {
       try { return await enqueueBulkAction(req, res, action); }
