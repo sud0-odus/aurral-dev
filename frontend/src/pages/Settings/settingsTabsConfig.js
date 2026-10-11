@@ -204,6 +204,7 @@ const SETTINGS_SEARCH_METADATA = {
   connect: {
     sections: ["Connections", "Webhooks", "Notification events", "Inbox", "Connection"],
     services: {
+      "Apple Music": "personalized playlist recommendations one-time import connection experimental",
       Gotify: "push notifications mobile alerts",
       "Last.fm": "recommendations API key secret scrobbling",
       Ticketmaster: "local shows events",

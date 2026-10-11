@@ -306,3 +306,26 @@ test("a Various Artists credit on the request neither conflicts with nor confirm
   assert.equal(decideRecording(wanted, [{ ...file, artists: ["A Cover Band"] }]).decision, "uncertain");
   assert.equal(decideRecording({ ...wanted, artistAliases: ["Blue Swede"] }, [file]).decision, "selectable");
 });
+
+test("phase 6: multi-artist playlist credits can match the credited primary artist", () => {
+  for (const [credited, uploaded, title] of [
+    ["Ari Lennox & J. Cole", "Ari Lennox", "Shea Butter Baby"],
+    ["Mustard & Roddy Ricch", "Mustard", "Ballin’"],
+  ]) {
+    const result = decideRecording(
+      { title, artists: [credited], durationMs: 200000 },
+      [{ title, artists: [uploaded], durationMs: 200000 }],
+    );
+    assert.equal(result.decision, "selectable", `${credited} / ${uploaded}`);
+    assert.ok(result.candidates[0].evidence.includes("artist"));
+  }
+});
+
+test("phase 6: unrelated performer remains an artist contradiction", () => {
+  const result = decideRecording(
+    { title: "Ballin’", artists: ["Mustard & Roddy Ricch"], durationMs: 200000 },
+    [{ title: "Ballin’", artists: ["Unrelated Singer"], durationMs: 200000 }],
+  );
+  assert.equal(result.decision, "skip");
+  assert.ok(result.candidates[0].contradictions.includes("artist"));
+});

@@ -104,10 +104,15 @@ function artistKey(name) {
 }
 
 function artistSimilarity(requested, credit) {
-  const left = artistKey(coreArtist(requested));
-  return Math.max(0, ...creditedArtists(credit).map((name) => {
-    const right = artistKey(name);
-    return Math.max(similarity(left, right), similarity(left.replace(/ /g, ""), right.replace(/ /g, "")));
+  // A playlist may credit "Ari Lennox & J. Cole" while an official upload
+  // identifies Ari Lennox alone. Compare each genuine credited performer,
+  // not only the joined credit; never relax the minimum artist threshold.
+  return Math.max(0, ...creditedArtists(requested).flatMap((requestedName) => {
+    const left = artistKey(requestedName);
+    return creditedArtists(credit).map((name) => {
+      const right = artistKey(name);
+      return Math.max(similarity(left, right), similarity(left.replace(/ /g, ""), right.replace(/ /g, "")));
+    });
   }));
 }
 

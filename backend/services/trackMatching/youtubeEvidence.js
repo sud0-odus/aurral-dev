@@ -36,7 +36,11 @@ export function readYoutubeUpload(title, channel, artistNames) {
 // any version wording.
 export function parseYoutubeTitle(title, artistNames, requestedTitle) {
   const raw = String(title || "").trim();
-  const cleaned = stripPromoDescriptors(raw.replace(/[「『]([^」』]+)[」』]/gu, " - $1 - ")) || raw;
+  // YouTube label uploads append a soundtrack/album attribution such as
+  // "(From Creed II: The Album/Audio)". This is not part of the recording
+  // title or a remix/version; retain real Live/Remix/Edit descriptors.
+  const withoutAlbumAudioLabel = raw.replace(/\s*\(From\s+[^()]+\/Audio\)\s*$/iu, "");
+  const cleaned = stripPromoDescriptors(withoutAlbumAudioLabel.replace(/[「『]([^」』]+)[」』]/gu, " - $1 - ")) || withoutAlbumAudioLabel;
   const segments = cleaned.split(/\s+\|\s+/u)
     .flatMap((part) => splitArtistTitleSegments(part) || [part])
     .map((segment) => segment.trim())
