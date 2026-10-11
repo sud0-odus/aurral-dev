@@ -1,0 +1,157 @@
+import { useEffect, useState } from "react";
+import { getData, postData } from "../../../utils/api/core.js";
+import { SettingsIntegrationModal } from "./SettingsIntegrationCards";
+
+const readError = (error) => error?.response?.data?.message || error?.response?.data?.error || error.message || "Request failed";
+
+export function AppleMusicPocModal({ onClose }) {
+  const [headers, setHeaders] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [groups, setGroups] = useState([]);
+  const [items, setItems] = useState([]);
+  const [chosen, setChosen] = useState(null);
+  const [tracks, setTracks] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [operation, setOperation] = useState(null);
+
+  const loadGroups = async () => {
+    setBusy(true); setMessage("");
+    try {
+      const result = await getData("/playlists/apple-poc/groups");
+      if (!result.ok) throw new Error(result.message || "Unable to load recommendations");
+      setConnected(true); setGroups(result.items || []);
+    } catch (e) { setConnected(false); setMessage(readError(e)); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { loadGroups(); }, []);
+
+  const connect = async () => {
+    setBusy(true); setMessage("");
+    try {
+      const parsed = JSON.parse(headers);
+      const result = await postData("/playlists/apple-poc/connect", parsed);
+      setHeaders("");
+      if (!result.ok) throw new Error(result.message || "Apple rejected this session");
+      setConnected(true); setMessage("Apple Music connected for this temporary session.");
+      await loadGroups();
+    } catch (e) { setMessage(readError(e)); }
+    finally { setBusy(false); }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    try { await postData("/playlists/apple-poc/disconnect", {}); setConnected(false); setGroups([]); setItems([]); setChosen(null); setTracks([]); setMessage("Apple Music disconnected."); }
+    catch (e) { setMessage(readError(e)); }
+    finally { setBusy(false); }
+  };
+
+  const openGroup = async (id) => {
+    setBusy(true); setItems([]); setChosen(null); setTracks([]); setOperation(null);
+    try {
+      const result = await getData("/playlists/apple-poc/group", { params: { id } });
+      if (!result.ok) throw new Error(result.message || "Unable to load group");
+      setItems(result.items || []); setMessage("");
+    } catch (e) { setMessage(readError(e)); }
+    finally { setBusy(false); }
+  };
+
+  const openPlaylist = async (item) => {
+    setBusy(true); setChosen(null); setTracks([]); setOperation(null);
+    try {
+      const result = await getData("/playlists/apple-poc/tracks", { params: { id: item.id } });
+      if (!result.ok) throw new Error(result.message || "Unable to load playlist");
+      setTracks(result.tracks || []); setHasMore(!!result.hasMore); setChosen(item); setMessage("");
+    } catch (e) { setMessage(readError(e)); }
+    finally { setBusy(false); }
+  };
+
+  const importPlaylist = async () => {
+    if (!chosen || hasMore || !tracks.length) return;
+    setBusy(true); setMessage("");
+    try {
+      const payload = { name: chosen.name || "Apple Music Playlist", sourceName: "Apple Music", tracks: tracks.filter(t => t.artist && t.title).map(t => ({ artistName: t.artist, trackName: t.title, albumName: t.album })) };
+      if (!payload.tracks.length) throw new Error("No valid tracks to import");
+      const result = await postData("/playlists/shared-playlists/import", payload);
+      if (!result.success) throw new Error(result.message || "Import was not accepted");
+      setOperation(result.operationId);
+      setMessage(`Import queued: ${payload.tracks.length} tracks in ${payload.name}.`);
+    } catch (e) { setMessage(readError(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <SettingsIntegrationModal title="Apple Music (experimental)" onClose={onClose}>
+      <style>{`
+        /* apple-p5-layout-v2: fixed desktop shell, nested track scroll, visible action */
+        .settings-page__modal--integration:has(.apple-p5) { width: min(900px, calc(100vw - 28px)); max-width: 900px; max-height: min(94dvh, 980px); display: flex; flex-direction: column; }
+        .settings-page__modal--integration:has(.apple-p5) .settings-page__modal-body { min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain; }
+        .settings-page__modal--integration:has(.apple-p5) .apple-p5 { gap: 10px; padding-bottom: 6px; }
+        .settings-page__modal--integration:has(.apple-p5) .apple-p5__panel { gap: 8px; padding: 11px 14px; }
+        .settings-page__modal--integration:has(.apple-p5) .apple-p5__intro { gap: 2px; }
+        .settings-page__modal--integration:has(.apple-p5) .apple-p5__tracklist { height: clamp(130px, 21dvh, 220px); max-height: none; overflow-y: scroll; scrollbar-width: auto; scrollbar-color: #898990 #303038; scrollbar-gutter: stable; }
+        .settings-page__modal--integration:has(.apple-p5) .apple-p5__tracklist::-webkit-scrollbar { width: 11px; }
+        .settings-page__modal--integration:has(.apple-p5) .apple-p5__tracklist::-webkit-scrollbar-thumb { background: #898990; border-radius: 12px; border: 2px solid #303038; }
+        .settings-page__modal--integration:has(.apple-p5) .apple-p5__tracklist::-webkit-scrollbar-track { background: #303038; }
+        @media (min-height: 760px) and (min-width: 700px) { .settings-page__modal--integration:has(.apple-p5) .settings-page__modal-body { overflow-y: auto; } }
+        .apple-p5 { display: grid; gap: 18px; min-width: 0; padding: 4px 2px 12px; }
+        .apple-p5__intro { display: grid; gap: 6px; }
+        .apple-p5__intro p { margin: 0; line-height: 1.55; }
+        .apple-p5__panel { border: 1px solid var(--border-color, #45454d); border-radius: 12px; padding: 16px; min-width: 0; display: grid; gap: 12px; }
+        .apple-p5__title { font-size: 1rem; font-weight: 700; margin: 0; line-height: 1.35; }
+        .apple-p5__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .apple-p5__row .btn { white-space: normal; text-align: left; line-height: 1.35; min-height: 36px; }
+        .apple-p5__button { padding: 8px 12px; border-radius: 8px; }
+        .apple-p5__status { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; }
+        .apple-p5__dot { width: 8px; height: 8px; border-radius: 50%; background: #929292; }
+        .apple-p5__dot.is-connected { background: #43b987; }
+        .apple-p5__note { font-size: .86rem; opacity: .8; line-height: 1.5; }
+        .apple-p5__feedback { padding: 12px 14px; border: 1px solid #478b74; border-radius: 9px; background: rgba(36, 130, 99, .12); line-height: 1.5; overflow-wrap: anywhere; }
+        .apple-p5__tracklist { max-height: 275px; overflow-y: auto; overscroll-behavior: contain; padding: 8px 12px 8px 38px; margin: 0; border: 1px solid var(--border-color, #45454d); border-radius: 8px; }
+        .apple-p5__tracklist li { padding: 5px 0; line-height: 1.4; }
+        .apple-p5 textarea { box-sizing: border-box; width: 100%; min-height: 96px; }
+        @media(max-width: 600px) { .apple-p5__panel { padding: 12px; } .apple-p5__tracklist { max-height: 210px; } }
+      `}</style>
+      <div className="apple-p5">
+        <div className="apple-p5__intro">
+          <p>Explore personalized Apple Music recommendations and import selected playlists into Aurral.</p>
+          <p className="apple-p5__note">One-time import only; automatic synchronization is disabled. Apple sign-in uses the existing Windows applemusic-mcp helper. The temporary bridge keeps request headers in memory for up to one hour.</p>
+        </div>
+        <section className="apple-p5__panel" aria-label="Apple Music connection">
+          <div className="apple-p5__row" style={{justifyContent:"space-between"}}>
+            <h4 className="apple-p5__title">Connection</h4>
+            <span className="apple-p5__status"><span className={`apple-p5__dot${connected ? " is-connected" : ""}`} aria-hidden="true" />{connected ? "Connected" : "Not connected"}</span>
+          </div>
+          {!connected && <>
+            <p className="apple-p5__note">Paste the Authorization and Music-User-Token headers as JSON. Do not share them in chat.</p>
+            <textarea className="arr-input" rows={4} autoComplete="off" spellCheck={false} placeholder='{"Authorization":"Bearer ...","Music-User-Token":"..."}' value={headers} onChange={e => setHeaders(e.target.value)} />
+            <div className="apple-p5__row"><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || !headers.trim()} onClick={connect}>Connect Apple Music</button></div>
+          </>}
+          {connected && <div className="apple-p5__row">
+            <button className="btn btn-secondary apple-p5__button" type="button" disabled={busy} onClick={loadGroups}>Refresh recommendations</button>
+            <button className="btn btn-secondary apple-p5__button" type="button" disabled={busy} onClick={disconnect}>Disconnect</button>
+          </div>}
+          {message && <div role="status" className="apple-p5__feedback">{message}</div>}
+          {busy && <p className="apple-p5__note" role="status">Loading…</p>}
+        </section>
+        {!!groups.length && <section className="apple-p5__panel">
+          <h4 className="apple-p5__title">Recommendation groups</h4>
+          <div className="apple-p5__row">{groups.map(g => <button className="btn btn-secondary apple-p5__button" type="button" key={g.id} disabled={busy} onClick={() => openGroup(g.id)}>{g.name}</button>)}</div>
+        </section>}
+        {!!items.length && <section className="apple-p5__panel">
+          <h4 className="apple-p5__title">Recommended playlists</h4>
+          <div className="apple-p5__row">{items.filter(i=>i.type === "playlists").map(i => <button className="btn btn-secondary apple-p5__button" type="button" key={i.id} disabled={busy} onClick={() => openPlaylist(i)}>{i.name}</button>)}</div>
+          {!items.some(i=>i.type === "playlists") && <p className="apple-p5__note">This recommendation group contains no supported playlists. Album and station imports are not enabled.</p>}
+        </section>}
+        {chosen && <section className="apple-p5__panel">
+          <h4 className="apple-p5__title">{chosen.name} — {tracks.length} tracks loaded{hasMore ? " (more available)" : ""}</h4>
+          <p className="apple-p5__note" style={{margin:0}}>Scroll inside the track list to review all loaded tracks. {hasMore ? "Apple supplied a next-page link; the full total has not been verified." : "No next-page link was returned."}</p>
+          <ol className="apple-p5__tracklist" tabIndex={0} aria-label="Scrollable Apple Music track preview">{tracks.map((t,i)=><li key={`${t.id}-${i}`}>{t.artist} — {t.title}</li>)}</ol>
+          {hasMore && <p className="apple-p5__note">Apple returned a next-page link. Only the first {tracks.length} tracks have been loaded; total playlist size is unknown. Import remains disabled until all pages are retrieved.</p>}
+          <div className="apple-p5__row" style={{position:"sticky",bottom:0,background:"var(--bg-primary, #222)",padding:"7px 0",zIndex:1}}><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || hasMore || !tracks.length || operation != null} onClick={importPlaylist}>{operation != null ? `Import queued (operation #${operation})` : "Import playlist into Aurral"}</button></div>
+        </section>}
+      </div>
+    </SettingsIntegrationModal>
+  );
+}
