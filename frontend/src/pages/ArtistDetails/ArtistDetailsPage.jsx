@@ -48,6 +48,7 @@ import { ArtistDetailsLibraryAlbums } from "./components/ArtistDetailsLibraryAlb
 import { ArtistDetailsReleaseGroups } from "./components/ArtistDetailsReleaseGroups";
 import { ArtistDetailsAppearsOn } from "./components/ArtistDetailsAppearsOn";
 import { ArtistDetailsPreviewTracks } from "./components/ArtistDetailsPreviewTracks";
+import { ArtistDetailsOwnedTracks } from "./components/ArtistDetailsOwnedTracks";
 import { ArtistDetailsAbout } from "./components/ArtistDetailsAbout";
 import { ArtistDetailsSimilar } from "./components/ArtistDetailsSimilar";
 import { DeleteAlbumModal } from "./components/DeleteAlbumModal";
@@ -544,6 +545,12 @@ function ArtistDetailsPage() {
         onTasteFeedback={handleCurrentArtistTasteFeedback}
         tasteFeedbackUsed={currentArtistFeedback}
         tasteActionPending={tasteActionPending}
+      />
+
+      <ArtistDetailsOwnedTracks
+        artistMbid={mbid}
+        artistName={artistDisplayName}
+        existsInLibrary={existsInLibrary}
       />
 
       <ArtistDetailsPreviewTracks
