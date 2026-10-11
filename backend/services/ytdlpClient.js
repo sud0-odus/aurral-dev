@@ -230,6 +230,27 @@ async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
   return results;
 }
 
+async function inspectVideoFor(_config = null, videoId) {
+  const id = String(videoId || "").trim();
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+  const url = `https://www.youtube.com/watch?v=${id}`;
+  const { stdout } = await runYtdlp(
+    ["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", "--", url],
+    { timeoutMs: 60000 },
+  );
+  const entry = JSON.parse(stdout);
+  if (String(entry.id || "") !== id) return null;
+  return {
+    id,
+    title: String(entry.title || "").trim(),
+    url,
+    channel: String(entry.channel || entry.uploader || "").trim(),
+    durationSec: Number.isFinite(Number(entry.duration)) && Number(entry.duration) > 0
+      ? Number(entry.duration) : null,
+    liveStatus: String(entry.live_status || "").trim().toLowerCase(),
+  };
+}
+
 function resolveStagingDir(config, jobId) {
   return path.join(
     resolveYtdlpStagingRoot(getSettings(config).stagingPath),
@@ -331,6 +352,9 @@ export class YtdlpClient {
 
   search(query, options) {
     return searchFor(this._config, query, options);
+  }
+  inspectVideo(videoId) {
+    return inspectVideoFor(this._config, videoId);
   }
 
   downloadAudio(videoUrl, options) {

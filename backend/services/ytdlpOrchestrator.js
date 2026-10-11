@@ -81,6 +81,25 @@ async function handleYtdlpSearch(payload, helpers) {
   const aggregated = [];
   const seen = new Set();
   let lastError = "";
+  // The playlist's original video is an explicit first candidate, but it still
+  // passes through the same identity and quality checks as ordinary results.
+  const sourceVideoId = String(job.sourceVideoId || "").trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(sourceVideoId) && !deniedIds.has(sourceVideoId)) {
+    try {
+      const original = await ytdlpClient.inspectVideo(sourceVideoId);
+      if (original && !isYtdlpLiveResult(original)) {
+        mergeSearchResults(aggregated, seen, [original], (entry) =>
+          String(entry.id || entry.url || "").trim().toLowerCase(),
+        );
+      }
+    } catch (error) {
+      logger.warn("ytdlp", "Original playlist video unavailable; searching normally", {
+        jobId: job.id,
+        sourceVideoId,
+        error: error?.message || String(error),
+      });
+    }
+  }
   for (const query of [...queries, fallbackQuery].filter(Boolean)) {
     if (hasEnoughCandidates(aggregated, resolvedTrack)) break;
     if (query === fallbackQuery && aggregated.length > 0) break;
@@ -111,6 +130,13 @@ async function handleYtdlpSearch(payload, helpers) {
   const candidates = usableEvaluationEntries(evaluation)
     .filter((entry) => !deniedIds.has(String(entry.candidate?.provider?.id || "").trim()))
     .map(toPipelineCandidate);
+  if (sourceVideoId) {
+    const originalIndex = candidates.findIndex((candidate) =>
+      String(candidate?.raw?.id || "") === sourceVideoId);
+    if (originalIndex > 0) {
+      candidates.unshift(...candidates.splice(originalIndex, 1));
+    }
+  }
   if (candidates.length === 0) {
     const message =
       lastError && aggregated.length === 0
