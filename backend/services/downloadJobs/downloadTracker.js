@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import path from "node:path";
+import fs from "node:fs";
 import { db } from "../../config/db-sqlite.js";
 import { enqueuePipelineJob, listHonkerJobs } from "../honkerDb.js";
 import {
@@ -1325,6 +1326,40 @@ export class DownloadTracker {
     }
     this._update(job);
     this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+    // Resolve failed jobs for the SAME owner, never across user boundaries.
+    if (!this._issue9Reconciling && !job.upgradeForJobId &&
+        job.managedBy === "aurral" && finalPath && fs.existsSync(finalPath)) {
+      const ownerOf = (entry) => {
+        const playlistId = String(entry.playlistId || entry.playlistType || "");
+        const playlist = flowPlaylistConfig.getStaticPlaylist(playlistId) ||
+          flowPlaylistConfig.getFlow(playlistId);
+        return playlist?.ownerUserId == null ? null : String(playlist.ownerUserId);
+      };
+      const owner = ownerOf(job);
+      if (owner !== null) {
+        const normalize = (value) => String(value || "").trim().normalize("NFKC").toLocaleLowerCase();
+        for (const other of this.jobs.values()) {
+          if (other.id === job.id || other.status !== "failed" ||
+              other.managedBy !== "aurral" || other.upgradeForJobId ||
+              String(other.playlistId || other.playlistType || "") ===
+                String(job.playlistId || job.playlistType || "") ||
+              ownerOf(other) !== owner ||
+              normalize(other.artistName) !== normalize(job.artistName) ||
+              normalize(other.trackName) !== normalize(job.trackName) ||
+              (other.sourceVideoId && job.sourceVideoId && other.sourceVideoId !== job.sourceVideoId) ||
+              (other.trackMbid && job.trackMbid && other.trackMbid !== job.trackMbid) ||
+              (other.durationMs && job.durationMs &&
+                Math.abs(Number(other.durationMs) - Number(job.durationMs)) > 5000)) continue;
+          // Do not let a reconciled job start another matching pass.
+          this._issue9Reconciling = true;
+          try {
+            this.setDone(other.id, finalPath, albumName, externalPath);
+          } finally {
+            this._issue9Reconciling = false;
+          }
+        }
+      }
+    }
     return true;
   }
 

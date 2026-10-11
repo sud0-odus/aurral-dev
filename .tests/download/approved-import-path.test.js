@@ -908,3 +908,36 @@ test("wanted covers every library job regardless of playlist access", async () =
     requestUser = { role: "admin" };
   }
 });
+
+
+test("issue #9 reconciles failed jobs across playlists for the same owner only", async () => {
+  const a = "issue9-playlist-a";
+  const b = "issue9-playlist-b";
+  const foreign = "issue9-playlist-foreign";
+  const track = { artistName: "Tamahau", trackName: "Cold Blood", albumName: "Album" };
+  for (const [id, ownerUserId] of [[a, 7], [b, 7], [foreign, 8]]) {
+    flowPlaylistConfig.createStaticPlaylist({ id, name: id, ownerUserId, tracks: [track] });
+  }
+  const oldJob = downloadTracker.addJob(track, a);
+  const samePlaylist = downloadTracker.addJob(track, b);
+  const otherOwner = downloadTracker.addJob(track, foreign);
+  const incompatibleSource = downloadTracker.addJob(
+    { ...track, sourceVideoId: "AAAAAAAAAAA" }, a,
+  );
+  for (const id of [oldJob, samePlaylist, otherOwner, incompatibleSource]) {
+    downloadTracker.setFailed(id, "No suitable recording");
+  }
+  const file = path.join(process.env.DOWNLOAD_FOLDER, "issue9", "Cold Blood.m4a");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, "audio");
+  const completed = downloadTracker.addJob(
+    { ...track, sourceVideoId: "b-kuiFi7OL8" }, b,
+  );
+  assert.equal(downloadTracker.setDone(completed, file, "Album"), true);
+  assert.equal(downloadTracker.getJob(oldJob)?.status, "done");
+  assert.equal(downloadTracker.getJob(oldJob)?.finalPath, file);
+  assert.equal(downloadTracker.getJob(samePlaylist)?.status, "failed");
+  assert.equal(downloadTracker.getJob(otherOwner)?.status, "failed");
+  assert.equal(downloadTracker.getJob(incompatibleSource)?.status, "failed");
+  assert.equal(downloadTracker.getJob(completed)?.status, "done");
+});
