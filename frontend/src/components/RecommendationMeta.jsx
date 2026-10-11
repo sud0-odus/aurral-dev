@@ -6,15 +6,26 @@ export const getMatchPercent = (artist) => {
 };
 
 export default function RecommendationMeta({ artist, text, className }) {
-  const matchPercent = getMatchPercent(artist);
-  const matchLabel = matchPercent ? `${matchPercent}% match` : null;
-  const visibleText = matchLabel || text;
-  if (!visibleText) return null;
+  // matchPercent is a position-derived ranking label, not a calibrated similarity.
+  // Show supporting evidence instead of presenting rank as a probability.
+  const seeds = Array.isArray(artist?.supportingSeeds)
+    ? artist.supportingSeeds.map((seed) => seed?.artistName).filter(Boolean)
+    : [];
+  const tags = Array.isArray(artist?.matchedTags)
+    ? artist.matchedTags.filter(Boolean)
+    : [];
+  const detail = [
+    seeds.length ? `Related via: ${seeds.join(", ")}` : null,
+    tags.length ? `Shared tags: ${tags.join(", ")}` : null,
+  ].filter(Boolean).join(" • ");
+  const visibleText = seeds.length
+    ? `Related via ${seeds.slice(0, 2).join(" & ")}${seeds.length > 2 ? ` +${seeds.length - 2}` : ""}`
+    : tags.length
+      ? `Shared tags: ${tags.slice(0, 2).join(", ")}`
+      : text || "Suggested artist";
   return (
-    <Tooltip content={[matchLabel, text].filter(Boolean).join(" • ")}>
-      <p className={matchLabel ? `${className} artist-match-percent` : className}>
-        {visibleText}
-      </p>
+    <Tooltip content={detail || visibleText}>
+      <p className={className}>{visibleText}</p>
     </Tooltip>
   );
 }

@@ -17,6 +17,7 @@ import {
   mergeRetainedRecommendationPool,
   rerankRecommendations as rerankRecs,
   selectDiscoverySeeds,
+  shouldRetainDiscoveryRecommendations,
 } from "./recommendationPipeline.js";
 import { getMusicDataSourceName, getTrendingArtists } from "../musicDataSource/index.js";
 import { enqueueDiscoveryUserRefreshJob } from "../honkerDb.js";
@@ -430,7 +431,12 @@ const buildUserRecommendations = async ({ userId, user, existing, startedAt }) =
   });
   const recommendations = mergeRetainedRecommendationPool({
     freshRecommendations,
-    existingRecommendations: existing.recommendations || [],
+    existingRecommendations: shouldRetainDiscoveryRecommendations(
+      existing.provider,
+      getMusicDataSourceName(),
+    )
+      ? existing.recommendations || []
+      : [],
     existingArtistKeys,
     limit: getDiscoveryRecommendationPoolLimit(),
     runStartedAt: new Date(startedAt).toISOString(),
@@ -487,6 +493,7 @@ export const updateUserDiscoveryCache = async (userId, options = {}) => {
     dbOps.updateDiscoveryCache(
       {
         recommendations,
+        provider: getMusicDataSourceName(),
         basedOn: seeds.map((seed) => ({
           name: seed.artistName,
           id: seed.mbid,

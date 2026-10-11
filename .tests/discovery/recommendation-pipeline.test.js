@@ -9,6 +9,7 @@ import {
   mergeRetainedRecommendationPool,
   mergeResolvedRecommendations,
   rerankRecommendations,
+  shouldRetainDiscoveryRecommendations,
 } from "../../backend/services/discovery/recommendationPipeline.js";
 
 test("buildDiscoverySeedList prefers listening-history weight when the same artist exists in library and history", () => {
@@ -210,6 +211,15 @@ test("rerankRecommendations softens less-like feedback, hard-blocks exact artist
     discoveryMode: "deeper",
   });
   assert.equal(deeper[0].name, "Deeper Pick");
+});
+
+test("retaining recommendations requires the same recorded music-data provider", () => {
+  assert.equal(shouldRetainDiscoveryRecommendations("listenbrainz", "lastfm"), false);
+  assert.equal(shouldRetainDiscoveryRecommendations("lastfm", "listenbrainz"), false);
+  assert.equal(shouldRetainDiscoveryRecommendations(null, "lastfm"), false);
+  assert.equal(shouldRetainDiscoveryRecommendations("", "listenbrainz"), false);
+  assert.equal(shouldRetainDiscoveryRecommendations("lastfm", "lastfm"), true);
+  assert.equal(shouldRetainDiscoveryRecommendations("listenbrainz", "listenbrainz"), true);
 });
 
 test("mergeRetainedRecommendationPool preserves repeats and trims stale low scores", () => {

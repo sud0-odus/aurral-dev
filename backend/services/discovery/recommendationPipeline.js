@@ -665,6 +665,20 @@ const compareByStoredScore = (left, right) => {
   return String(left.name || "").localeCompare(String(right.name || ""));
 };
 
+// Co-listening is a useful signal, but one normalized match may be extremely
+// strong even without any verified tag affinity. Limit its contribution per
+// independent supporting seed instead of applying hard genre exclusions.
+const MAX_UNCORROBORATED_SIMILARITY_PER_SEED = 85;
+
+export const boundedSimilarityEvidence = (entry = {}) => {
+  const raw = Math.max(0, Number(entry.scoreSimilarity) || 0);
+  if ((Number(entry.scoreTagAffinity) || 0) > 0) return raw;
+  const supporters = Number(entry.seedCount) ||
+    (Array.isArray(entry.supportingSeeds) ? entry.supportingSeeds.length : 0);
+  if (supporters <= 0) return raw; // Legacy results have no reliable seed count.
+  return Math.min(raw, MAX_UNCORROBORATED_SIMILARITY_PER_SEED * supporters);
+};
+
 export const rerankRecommendations = (recommendations = [], limit = 100, options = {}) => {
   const mode = normalizeDiscoveryMode(options.discoveryMode);
   const multipliers = DISCOVERY_MODE_MULTIPLIERS[mode];
@@ -679,7 +693,7 @@ export const rerankRecommendations = (recommendations = [], limit = 100, options
       entry,
       feedbackAdjustment: adjustment,
       baseScore:
-        Number(entry.scoreSimilarity || 0) * multipliers.similarity +
+        boundedSimilarityEvidence(entry) * multipliers.similarity +
         Number(entry.scoreTagAffinity || 0) * multipliers.tagAffinity +
         Number(entry.scoreSeedCoverage || 0) * multipliers.seedCoverage +
         Number(entry.scoreNovelty || 0) * multipliers.novelty -
@@ -836,6 +850,9 @@ const applyRecommendationPoolMetadata = (
     scoreAgingPenalty: Number(agingPenalty.toFixed(2)),
   };
 };
+
+export const shouldRetainDiscoveryRecommendations = (previousProvider, currentProvider) =>
+  Boolean(previousProvider && currentProvider && previousProvider === currentProvider);
 
 export const mergeRetainedRecommendationPool = ({
   freshRecommendations = [],
