@@ -319,6 +319,9 @@ export const normalizePlaylistTrack = (track) => {
   const reason = String(track.reason ?? "").trim();
   const canonicalJobId = String(track.canonicalJobId ?? track.libraryJobId ?? "").trim();
   const membershipId = String(track.membershipId || "").trim();
+  const sourceVideoId = /^[A-Za-z0-9_-]{11}$/.test(String(track.sourceVideoId || ""))
+    ? String(track.sourceVideoId)
+    : null;
   return {
     artistName,
     trackName,
@@ -328,6 +331,7 @@ export const normalizePlaylistTrack = (track) => {
     trackMbid: trackMbid || null,
     releaseYear: releaseYear || null,
     durationMs,
+    ...(sourceVideoId ? { sourceVideoId } : {}),
     artistAliases,
     reason: reason || null,
     ...(canonicalJobId ? { canonicalJobId } : {}),

@@ -217,6 +217,7 @@ db.exec(`
     album_track_count INTEGER,
     album_track_titles TEXT,
     artist_aliases TEXT,
+    source_video_id TEXT,
     playlist_id TEXT NOT NULL,
     playlist_generation INTEGER NOT NULL DEFAULT 0,
     playlist_type TEXT,
@@ -878,6 +879,9 @@ if (!tableColumns.includes("release_year")) {
 }
 if (!tableColumns.includes("duration_ms")) {
   tryAddColumn("ALTER TABLE playlist_download_jobs ADD COLUMN duration_ms INTEGER");
+}
+if (!tableColumns.includes("source_video_id")) {
+  tryAddColumn("ALTER TABLE playlist_download_jobs ADD COLUMN source_video_id TEXT");
 }
 if (!tableColumns.includes("external_path")) {
   tryAddColumn("ALTER TABLE playlist_download_jobs ADD COLUMN external_path TEXT");

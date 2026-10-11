@@ -156,6 +156,7 @@ const normalizeRows = (rows) => {
     raw.push({
       artistName,
       trackName,
+      sourceVideoId: /^[A-Za-z0-9_-]{11}$/.test(String(row.id)) ? String(row.id) : null,
       albumName: row.item_type === "song" ? getNamedValue(row.album) || null : null,
       durationMs: normalizeDuration(row.duration),
     });

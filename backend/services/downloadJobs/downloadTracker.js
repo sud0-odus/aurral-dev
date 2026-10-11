@@ -99,6 +99,7 @@ function rowToJob(row) {
     albumTrackCount: normalizePositiveInteger(row.album_track_count),
     albumTrackTitles: parseStringListJson(row.album_track_titles),
     artistAliases: parseStringListJson(row.artist_aliases),
+    sourceVideoId: row.source_video_id || null,
     playlistId: row.playlist_id || row.playlist_type,
     playlistGeneration: Number(row.playlist_generation ?? 0),
     playlistType: row.playlist_type || row.playlist_id,
@@ -155,6 +156,7 @@ const insertStmt = db.prepare(`
     album_track_count,
     album_track_titles,
     artist_aliases,
+    source_video_id,
     playlist_id,
     playlist_generation,
     playlist_type,
@@ -178,7 +180,7 @@ const insertStmt = db.prepare(`
     upgrade_for_job_id,
     manual_replacement_search
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const updateStmt = db.prepare(`
@@ -301,6 +303,7 @@ function buildPipelinePayload(job) {
       albumTrackCount: job.albumTrackCount,
       albumTrackTitles: job.albumTrackTitles || [],
       artistAliases: job.artistAliases || [],
+      sourceVideoId: job.sourceVideoId || null,
     },
     attempt: 0,
     destination: buildAurralTrackDestination(playlistId, artistDir, albumDir, { ephemeral }),
@@ -763,6 +766,7 @@ export class DownloadTracker {
       job.albumTrackCount ?? null,
       stringifyStringListJson(job.albumTrackTitles),
       stringifyStringListJson(job.artistAliases),
+      job.sourceVideoId ?? null,
       job.playlistId || job.playlistType,
       job.playlistGeneration ?? 0,
       job.playlistType || job.playlistId,
@@ -852,6 +856,8 @@ export class DownloadTracker {
       albumTrackCount: normalizePositiveInteger(track?.albumTrackCount),
       albumTrackTitles: normalizeStringList(track?.albumTrackTitles),
       artistAliases: normalizeStringList(track?.artistAliases),
+      sourceVideoId: /^[A-Za-z0-9_-]{11}$/.test(String(track?.sourceVideoId || ""))
+        ? String(track.sourceVideoId) : null,
       playlistId,
       playlistGeneration: Number.isInteger(options?.playlistGeneration)
         ? options.playlistGeneration
