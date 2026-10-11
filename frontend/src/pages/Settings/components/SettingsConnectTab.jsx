@@ -8,6 +8,7 @@ import { getAppBasePath } from "../../../utils/basePath.js";
 import { Plus, Trash2, GripVertical } from "lucide-react";
 import { SettingsInput, SettingsTextarea } from "./SettingsField";
 import { IntegrationCard, SettingsIntegrationModal } from "./SettingsIntegrationCards";
+import { AppleMusicPocModal } from "./AppleMusicPocModal";
 import {
   SettingsArrCardGrid,
   SettingsArrFieldSet,
@@ -253,7 +254,13 @@ export function SettingsConnectTab({
   };
 
   return (
-    <div className="arr-page">
+    <div className="arr-page arr-page--apple-p5-connect">
+      <style>{`
+        .arr-page--apple-p5-connect .arr-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 215px), 1fr)); gap: 12px; }
+        .arr-page--apple-p5-connect .arr-card { min-width: 0; padding: 15px; }
+        .arr-page--apple-p5-connect .arr-card__title, .arr-page--apple-p5-connect .arr-card__subtitle, .arr-page--apple-p5-connect .arr-card__meta { overflow-wrap: anywhere; }
+        @media (min-width: 1250px) { .arr-page--apple-p5-connect .arr-card-grid { grid-template-columns: repeat(3, minmax(220px, 1fr)); } }
+      `}</style>
       <form onSubmit={handleSave} className="arr-form" autoComplete="off">
         <SettingsArrFieldSet legend="Connections">
           <SettingsArrCardGrid>
@@ -263,6 +270,13 @@ export function SettingsConnectTab({
               status={getConfiguredStatus(gotifyConfigured)}
               meta={gotify.url ? gotify.url.replace(/^https?:\/\//, "") : "Mobile alerts"}
               onClick={() => setActiveModal("gotify")}
+            />
+            <IntegrationCard
+              title="Apple Music"
+              subtitle="Personalized playlist recommendations"
+              status={{ label: "Experimental", className: "is-warning" }}
+              meta="One-time playlist imports"
+              onClick={() => setActiveModal("apple-music")}
             />
             <IntegrationCard
               title="Last.fm"
@@ -585,6 +599,8 @@ export function SettingsConnectTab({
           </div>
         </SettingsArrFieldSet>
       </form>
+
+      {activeModal === "apple-music" && <AppleMusicPocModal onClose={() => setActiveModal(null)} />}
 
       {activeModal === "gotify" && (
         <SettingsIntegrationModal
