@@ -17,6 +17,63 @@ export function AppleMusicPocModal({ onClose }) {
   const [operation, setOperation] = useState(null);
   const [existingMatches, setExistingMatches] = useState([]);
   const [matchStatus, setMatchStatus] = useState("idle"); // PHASE8C3_OWNER_IMPORT_LOOKUP
+  // PHASE8D1_INVENTORY: recommendation-discovered playlists only; not the user's full Apple library.
+  const [inventory, setInventory] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState("");
+  // PHASE8D2_TRACK_COMPARE: cached scan results, read-only. No downloads or imports.
+  const [comparing, setComparing] = useState(false);
+  const [comparisonError, setComparisonError] = useState("");
+  const [comparisons, setComparisons] = useState({});
+  const compareImported = async (rows) => {
+    if (!connected || !Array.isArray(rows)) return;
+    setComparing(true); setComparisonError(""); setComparisons({});
+    const next = {};
+    const imported = rows.filter(row => row.matches.length);
+    for (const row of imported) {
+      if (row.matches.length !== 1) { next[row.id] = { status: "ambiguous-playlist" }; continue; }
+      try {
+        const apple = await getData("/playlists/apple-poc/tracks", { params: { id: row.id } });
+        if (!apple.ok || apple.hasMore || !Array.isArray(apple.tracks)) { next[row.id] = { status: "incomplete" }; continue; }
+        const result = await postData("/playlists/apple-poc/compare", {
+          playlistId: row.matches[0].id,
+          tracks: apple.tracks.map(t => ({ artist: t.artist, title: t.title, album: t.album })),
+        });
+        next[row.id] = { ...result, status: "ready" };
+      } catch(e) { next[row.id] = { status: "failed" }; setComparisonError("Some imported playlists could not be compared. Their status remains unverified."); }
+      setComparisons({ ...next });
+    }
+    setComparing(false);
+  };
+
+  const scanInventory = async () => {
+    if (scanning || !connected) return;
+    setScanning(true); setScanError(""); setInventory(null); setComparisons({}); setComparisonError("");
+    try {
+      const owned = await getData("/playlists/apple-poc/inventory");
+      if (!Array.isArray(owned.items)) throw new Error("Invalid Aurral inventory response");
+      const names = new Map();
+      const failures = [];
+      // One request at a time prevents flooding the temporary Apple Music bridge.
+      for (const group of groups.slice(0, 20)) {
+        try {
+          const result = await getData("/playlists/apple-poc/group", { params: { id: group.id } });
+          if (!result.ok || !Array.isArray(result.items)) throw new Error("Group request failed");
+          for (const p of result.items.filter(p => p.type === "playlists" && p.id && p.name)) {
+            if (!names.has(p.id)) names.set(p.id, { id: p.id, name: p.name });
+          }
+        } catch { failures.push(group.name || group.id); }
+      }
+      const normalize = value => String(value || "").trim().toLocaleLowerCase();
+      const rows = [...names.values()].map(p => {
+        const matches = owned.items.filter(o => normalize(o.name) === normalize(p.name));
+        return { ...p, matches, status: matches.length ? "Imported — tracks not compared" : "Not imported" };
+      }).sort((a,b) => a.name.localeCompare(b.name));
+      setInventory({ rows, failures, totalGroups: groups.length, scannedGroups: Math.min(groups.length, 20) });
+      await compareImported(rows); // PHASE8D3A_SCAN_COMPARE: compare imported only, in the same action
+    } catch(e) { setScanError(readError(e)); }
+    finally { setScanning(false); }
+  };
 
   const loadGroups = async () => {
     setBusy(true); setMessage("");
@@ -44,7 +101,7 @@ export function AppleMusicPocModal({ onClose }) {
 
   const disconnect = async () => {
     setBusy(true);
-    try { await postData("/playlists/apple-poc/disconnect", {}); setConnected(false); setGroups([]); setItems([]); setChosen(null); setTracks([]); setMessage("Apple Music disconnected."); }
+    try { await postData("/playlists/apple-poc/disconnect", {}); setConnected(false); setGroups([]); setItems([]); setInventory(null); setChosen(null); setTracks([]); setMessage("Apple Music disconnected."); }
     catch (e) { setMessage(readError(e)); }
     finally { setBusy(false); }
   };
@@ -146,6 +203,30 @@ export function AppleMusicPocModal({ onClose }) {
           {message && <div role="status" className="apple-p5__feedback">{message}</div>}
           {busy && <p className="apple-p5__note" role="status">Loading…</p>}
         </section>
+        {connected && <section className="apple-p5__panel" aria-label="Playlist import status">
+          <div className="apple-p5__row" style={{justifyContent:"space-between"}}>
+            <h4 className="apple-p5__title">Playlist import status</h4>
+            <div className="apple-p5__row">
+              <button className="btn btn-secondary apple-p5__button" type="button" disabled={busy || scanning || comparing || !groups.length} onClick={scanInventory}>{comparing ? "Comparing…" : scanning ? "Scanning…" : "Scan & Compare"}</button>
+            </div>
+          </div>
+          <p className="apple-p5__note">Read-only inventory of playlists found in Apple Music recommendation groups, not your complete Apple Music library. Scan & Compare checks only already imported playlists for track differences. Your locally added tracks are preserved.</p>
+          {comparisonError && <p role="alert" className="apple-p5__note">{comparisonError}</p>}
+          {scanError && <p role="alert" className="apple-p5__note">Scan failed: {scanError}</p>}
+          {inventory && <>
+            <p className="apple-p5__note">Discovered {inventory.rows.length} unique playlists · {inventory.rows.filter(p=>p.matches.length).length} previously imported · {inventory.rows.filter(p=>!p.matches.length).length} not imported.</p>
+            {(inventory.failures.length > 0 || inventory.scannedGroups < inventory.totalGroups) && <p role="alert" className="apple-p5__note">Partial scan: {inventory.failures.length} recommendation groups failed; {inventory.scannedGroups} of {inventory.totalGroups} groups attempted. Results may be incomplete.</p>}
+            {inventory.rows.map(p => <div key={p.id} className="apple-p5__row" style={{justifyContent:"space-between",borderTop:"1px solid var(--border-color, #45454d)",paddingTop:6}}>
+              <span>{p.name}</span><span className="apple-p5__note">{comparisons[p.id]?.status === "ready"
+                ? `${comparisons[p.id].matched} matched · ${comparisons[p.id].probable} possible · ${comparisons[p.id].missing} missing · ${comparisons[p.id].ambiguous} review · ${comparisons[p.id].localOnly} local additions`
+                : comparisons[p.id]?.status === "incomplete" ? "Apple track list incomplete — not compared"
+                : comparisons[p.id]?.status === "ambiguous-playlist" ? "Multiple Aurral matches — review"
+                : comparisons[p.id]?.status === "failed" ? "Comparison failed — unverified"
+                : p.status}{p.matches.length === 1 && !comparisons[p.id] ? ` (${p.matches[0].trackCount} in Aurral)` : ""}</span>
+            </div>)}
+            {!inventory.rows.length && <p className="apple-p5__note">No supported playlists discovered in these groups.</p>}
+          </>}
+        </section>}
         {!!groups.length && <section className="apple-p5__panel">
           <h4 className="apple-p5__title">Recommendation groups</h4>
           <div className="apple-p5__row">{groups.map(g => <button className="btn btn-secondary apple-p5__button" type="button" key={g.id} disabled={busy} onClick={() => openGroup(g.id)}>{g.name}</button>)}</div>

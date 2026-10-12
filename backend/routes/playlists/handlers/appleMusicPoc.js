@@ -36,6 +36,53 @@ function pocRequest(path, userId, method = "GET", payload = null) {
 }
 
 export function registerAppleMusicPoc(router) {
+  // PHASE8D2_TRACK_COMPARE: strictly read-only, owner-scoped, no mutations or download queues.
+  router.post("/apple-poc/compare", (req, res) => {
+    const { playlistId, tracks } = req.body || {};
+    if (typeof playlistId !== "string" || !/^[0-9a-f-]{36}$/i.test(playlistId) || !Array.isArray(tracks) || tracks.length > 3000) {
+      return res.status(400).json({ error: "Invalid playlist comparison request" });
+    }
+    const owned = flowPlaylistConfig.getStaticPlaylistsOwnedByUser(req.user.id);
+    const target = owned.find(p => p.id === playlistId && String(p.sourceName || "").toLowerCase() === "apple music");
+    if (!target) return res.status(404).json({ error: "Imported Apple Music playlist not found" });
+    const norm = v => String(v || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+    const core = t => `${norm(t?.artistName || t?.artist)}\u0001${norm(t?.trackName || t?.title)}`;
+    const album = t => norm(t?.albumName || t?.album);
+    const existing = (Array.isArray(target.tracks) ? target.tracks : []).filter(t => core(t) !== "\u0001");
+    const used = new Set();
+    let matched = 0, probable = 0, missing = 0, ambiguous = 0;
+    const details = [];
+    for (const t of tracks) {
+      const key = core(t);
+      if (key === "\u0001") { ambiguous++; details.push({ artist: String(t?.artist || ""), title: String(t?.title || ""), status: "needs-review" }); continue; }
+      const candidates = existing.map((e,i) => ({e,i})).filter(({e,i}) => !used.has(i) && core(e) === key);
+      const exact = candidates.filter(({e}) => album(e) === album(t) && album(e) !== "");
+      const chosen = exact.length === 1 ? exact[0] : (exact.length === 0 && candidates.length === 1 ? candidates[0] : null);
+      let status;
+      if (chosen) {
+        used.add(chosen.i);
+        status = exact.length === 1 ? "matched" : "possible-match";
+        if (status === "matched") matched++; else probable++;
+      } else if (candidates.length > 1 || exact.length > 1) { status="needs-review"; ambiguous++; }
+      else { status="missing"; missing++; }
+      details.push({ artist: String(t?.artist || t?.artistName || ""), title: String(t?.title || t?.trackName || ""), status });
+    }
+    return res.set("Cache-Control", "no-store").json({
+      playlistId, appleTracks: tracks.length, aurralTracks: existing.length,
+      matched, probable, missing, ambiguous, localOnly: existing.length-used.size, details,
+      // Existing local-only additions are not errors and are never removed here.
+    });
+  });
+
+  // PHASE8D1_INVENTORY: owner-scoped metadata only; never writes to playlists or queues.
+  router.get("/apple-poc/inventory", (req, res) => {
+    const normalized = (value) => String(value || "").trim().toLocaleLowerCase();
+    const items = flowPlaylistConfig.getStaticPlaylistsOwnedByUser(req.user.id)
+      .filter((p) => normalized(p.sourceName) === "apple music")
+      .map((p) => ({ id: p.id, name: p.name, trackCount: Array.isArray(p.tracks) ? p.tracks.length : 0 }));
+    return res.set("Cache-Control", "no-store").json({ items });
+  });
+
   // PHASE8C3_OWNER_IMPORT_LOOKUP: read-only; do not expose other users' playlists.
   router.get("/apple-poc/imported", (req, res) => {
     const name = typeof req.query.name === "string" ? req.query.name.trim() : "";
