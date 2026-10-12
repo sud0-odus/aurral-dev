@@ -16,7 +16,10 @@ function UserProfileMenu() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const triggerRef = useRef(null);
-  const { authRequired, canLogOut, logout } = useAuth();
+  const { authRequired, canLogOut, logout, user } = useAuth();
+  // PHASE8A1_USER_INDICATOR: visible account identity for family profiles.
+  const username = String(user?.username || "").trim();
+  const initial = username ? username.slice(0, 1).toUpperCase() : "";
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -45,19 +48,28 @@ function UserProfileMenu() {
     <div ref={menuRef} className="app-profile-menu">
       <TooltipButton
         ref={triggerRef}
-        label="User menu"
+        label={username ? `User menu: signed in as ${username}` : "User menu"}
         onClick={() => setMenuOpen((open) => !open)}
         className={`app-header-link app-profile-menu__trigger${menuOpen ? " is-open" : ""}`}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
       >
         <span className="app-profile-menu__icon" aria-hidden="true">
-          <User />
+          {initial ? (
+            <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>{initial}</span>
+          ) : (
+            <User />
+          )}
         </span>
       </TooltipButton>
 
       {menuOpen && (
         <div className="app-profile-menu__dropdown" role="menu">
+          {username && (
+            <div style={{ padding: "0.75rem 1rem", fontSize: "0.8rem", borderBottom: "1px solid var(--border-color, rgba(255,255,255,0.12))" }}>
+              Signed in as <strong>{username}</strong>
+            </div>
+          )}
           <ul className="app-profile-menu__list">
             <li role="none">
               <Link
