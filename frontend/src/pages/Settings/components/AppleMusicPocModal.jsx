@@ -25,6 +25,29 @@ export function AppleMusicPocModal({ onClose }) {
   const [comparing, setComparing] = useState(false);
   const [comparisonError, setComparisonError] = useState("");
   const [comparisons, setComparisons] = useState({});
+  const [restoreSelected, setRestoreSelected] = useState({}); // PHASE8D3B_SELECTIVE_RESTORE
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState("");
+
+  const restoreMissing = async (row) => {
+    const cmp = comparisons[row.id];
+    if (!cmp || cmp.status !== "ready" || row.matches.length !== 1 || restoreBusy) return;
+    const indexes = cmp.details.map((t, i) => t.status === "missing" && restoreSelected[`${row.id}:${i}`] ? i : -1).filter(i => i >= 0);
+    if (!indexes.length || indexes.length > 50) return;
+    setRestoreBusy(true); setRestoreMessage("");
+    try {
+      const confirmed = window.confirm(`Restore ${indexes.length} selected missing track(s) into ${row.name}? Existing and personal tracks will be preserved. This may queue downloads.`);
+      if (!confirmed) return;
+      const result = await postData("/playlists/apple-poc/restore-missing", {
+        playlistId: row.matches[0].id, applePlaylistId: row.id, selectedIndexes: indexes,
+      });
+      if (!result.success) throw new Error(result.message || "Restore was not queued");
+      setRestoreMessage(`Queued ${result.count} track(s) for ${row.name} (operation #${result.operationId}). Scan & Compare again after processing.`);
+      setComparisons({}); setInventory(null); setRestoreSelected({});
+    } catch(e) { setRestoreMessage(readError(e)); }
+    finally { setRestoreBusy(false); }
+  };
+
   const compareImported = async (rows) => {
     if (!connected || !Array.isArray(rows)) return;
     setComparing(true); setComparisonError(""); setComparisons({});
@@ -48,7 +71,7 @@ export function AppleMusicPocModal({ onClose }) {
 
   const scanInventory = async () => {
     if (scanning || !connected) return;
-    setScanning(true); setScanError(""); setInventory(null); setComparisons({}); setComparisonError("");
+    setScanning(true); setScanError(""); setInventory(null); setComparisons({}); setComparisonError(""); setRestoreSelected({}); setRestoreMessage("");
     try {
       const owned = await getData("/playlists/apple-poc/inventory");
       if (!Array.isArray(owned.items)) throw new Error("Invalid Aurral inventory response");
@@ -211,6 +234,7 @@ export function AppleMusicPocModal({ onClose }) {
             </div>
           </div>
           <p className="apple-p5__note">Read-only inventory of playlists found in Apple Music recommendation groups, not your complete Apple Music library. Scan & Compare checks only already imported playlists for track differences. Your locally added tracks are preserved.</p>
+          {restoreMessage && <p role="status" className="apple-p5__feedback">{restoreMessage}</p>}
           {comparisonError && <p role="alert" className="apple-p5__note">{comparisonError}</p>}
           {scanError && <p role="alert" className="apple-p5__note">Scan failed: {scanError}</p>}
           {inventory && <>
@@ -223,6 +247,14 @@ export function AppleMusicPocModal({ onClose }) {
                 : comparisons[p.id]?.status === "ambiguous-playlist" ? "Multiple Aurral matches — review"
                 : comparisons[p.id]?.status === "failed" ? "Comparison failed — unverified"
                 : p.status}{p.matches.length === 1 && !comparisons[p.id] ? ` (${p.matches[0].trackCount} in Aurral)` : ""}</span>
+              {comparisons[p.id]?.status === "ready" && comparisons[p.id].missing > 0 && p.matches.length === 1 && <div style={{width:"100%",padding:"8px 0 10px 12px"}}>
+                <strong>Missing Apple Music tracks — choose which to restore</strong>
+                {comparisons[p.id].details.map((t,i) => t.status === "missing" && <label key={`${p.id}-${i}`} style={{display:"flex",gap:8,alignItems:"center",marginTop:7}}>
+                  <input type="checkbox" checked={!!restoreSelected[`${p.id}:${i}`]} onChange={e=>setRestoreSelected(prev=>({...prev,[`${p.id}:${i}`]:e.target.checked}))} />
+                  {t.artist} — {t.title}
+                </label>)}
+                <div style={{marginTop:10}}><button type="button" className="btn btn-secondary apple-p5__button" disabled={scanning || comparing || restoreBusy || !comparisons[p.id].details.some((t,i)=>t.status === "missing" && restoreSelected[`${p.id}:${i}`])} onClick={()=>restoreMissing(p)}>Import selected missing tracks</button></div>
+              </div>}
             </div>)}
             {!inventory.rows.length && <p className="apple-p5__note">No supported playlists discovered in these groups.</p>}
           </>}

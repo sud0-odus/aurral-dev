@@ -1,5 +1,6 @@
 import https from "node:https";
 import { flowPlaylistConfig } from "../../../services/playlists/flowPlaylistConfig.js";
+import { playlistOperationQueue } from "../../../services/playlists/playlistOperationQueue.js"; // PHASE8D3B_SELECTIVE_RESTORE
 
 // Phase 5 homelab bridge: the Apple POC runs on this container only.
 // The POC's self-signed certificate is accepted only for this fixed loopback target.
@@ -36,6 +37,60 @@ function pocRequest(path, userId, method = "GET", payload = null) {
 }
 
 export function registerAppleMusicPoc(router) {
+  // PHASE8D3B_SELECTIVE_RESTORE: revalidate Apple source and current owner playlist before queueing.
+  router.post("/apple-poc/restore-missing", async (req, res) => {
+    const { playlistId, applePlaylistId, selectedIndexes } = req.body || {};
+    if (typeof playlistId !== "string" || !/^[0-9a-f-]{36}$/i.test(playlistId) ||
+        typeof applePlaylistId !== "string" || !/^pl\.[A-Za-z0-9_.-]{1,100}$/.test(applePlaylistId) ||
+        !Array.isArray(selectedIndexes) || selectedIndexes.length < 1 || selectedIndexes.length > 50 ||
+        selectedIndexes.some(i => !Number.isSafeInteger(i) || i < 0 || i >= 3000) ||
+        new Set(selectedIndexes).size !== selectedIndexes.length) {
+      return res.status(400).json({ error: "Invalid selective restore request (maximum 50 tracks)" });
+    }
+    const current = flowPlaylistConfig.getStaticPlaylistsOwnedByUser(req.user.id)
+      .find(p => p.id === playlistId && String(p.sourceName || "").toLowerCase() === "apple music");
+    if (!current) return res.status(404).json({ error: "Owned Apple Music playlist not found" });
+    try {
+      const result = await pocRequest(`/api/tracks?id=${encodeURIComponent(applePlaylistId)}`, req.user.id);
+      if (result.status !== 200 || result.body?.ok !== true || result.body?.hasMore || !Array.isArray(result.body?.tracks)) {
+        return res.status(result.status === 401 ? 409 : 422).json({ error: "Apple track list is unavailable or incomplete. Reconnect and scan again." });
+      }
+      const apple = result.body.tracks;
+      if (apple.length > 3000 || selectedIndexes.some(i => i >= apple.length)) return res.status(409).json({ error: "Apple playlist changed. Scan again." });
+      const norm = v => String(v || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+      const core = t => `${norm(t?.artistName || t?.artist)}\u0001${norm(t?.trackName || t?.title)}`;
+      const album = t => norm(t?.albumName || t?.album);
+      const existing = Array.isArray(current.tracks) ? current.tracks : [];
+      const chosen = [];
+      const seen = new Set();
+      for (const i of selectedIndexes) {
+        const track = apple[i];
+        const identity = core(track);
+        if (!track || identity === "\u0001" || seen.has(identity)) return res.status(409).json({ error: "Uncertain or duplicate selection. Scan again." });
+        seen.add(identity);
+        // A matching artist/title with changed album is POSSIBLE, never automatically 'missing'.
+        if (existing.some(t => core(t) === identity)) return res.status(409).json({ error: "Track already exists or is a possible match. Scan again." });
+        const artistName = String(track.artist || "").trim();
+        const trackName = String(track.title || "").trim();
+        if (!artistName || !trackName) return res.status(409).json({ error: "Track metadata incomplete. Scan again." });
+        chosen.push({ artistName, trackName, albumName: String(track.album || "").trim() });
+      }
+      // Refresh owner check immediately before enqueue, and do not overwrite or delete anything.
+      if (!flowPlaylistConfig.getStaticPlaylistsOwnedByUser(req.user.id).some(p => p.id === playlistId)) {
+        return res.status(404).json({ error: "Playlist no longer belongs to this user" });
+      }
+      const queued = await playlistOperationQueue.enqueuePayload({
+        kind: "shared-playlist-append-tracks",
+        label: `shared-playlist:${playlistId}:apple-restore`,
+        playlistId,
+        tracks: chosen,
+      });
+      return res.json({ success: true, queued: true, playlistId, count: chosen.length, operationId: queued.operationId });
+    } catch (error) {
+      return res.status(502).json({ error: "Unable to validate or queue Apple Music restore", message: error.message });
+    }
+  });
+
   // PHASE8D2_TRACK_COMPARE: strictly read-only, owner-scoped, no mutations or download queues.
   router.post("/apple-poc/compare", (req, res) => {
     const { playlistId, tracks } = req.body || {};
