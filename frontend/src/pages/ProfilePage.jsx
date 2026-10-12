@@ -4,6 +4,7 @@ import { useToast } from "../contexts/ToastContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useAccountSettings } from "./Settings/hooks/useAccountSettings";
 import { SettingsAccountTab } from "./Settings/components/SettingsAccountTab";
+import { AppleMusicPocModal } from "./Settings/components/AppleMusicPocModal";
 import { DotLoader } from "../components/DotLoader";
 import SectionRail from "../components/SectionRail.jsx";
 import {
@@ -17,6 +18,7 @@ function ProfilePage() {
   useDocumentTitle("Profile");
   const { showSuccess, showError } = useToast();
   const { user: authUser } = useAuth();
+  const [appleModalOpen, setAppleModalOpen] = useState(false);
   const [showSidebarArt, setShowSidebarArt] = useState(() =>
     getSidebarStageBackdropEnabled(authUser?.id),
   );
@@ -49,6 +51,19 @@ function ProfilePage() {
         </span>
       </div>
 
+      <section className="profile-settings__section settings-page__section" aria-label="Apple Music connection">
+        <div className="settings-page__section-intro">
+          <h3 className="settings-page__section-title">Apple Music</h3>
+          <p className="settings-page__section-note">
+            Browse your own Apple Music recommendations and import playlists to your account.
+            Temporary connection expires after one hour. Playlists over 100 tracks are not yet importable.
+          </p>
+        </div>
+        <button className="btn btn-secondary" type="button" onClick={() => setAppleModalOpen(true)}>
+          Import Apple Music Playlist
+        </button>
+      </section>
+      {appleModalOpen && <AppleMusicPocModal onClose={() => setAppleModalOpen(false)} />}
       <SettingsAccountTab
         hidePanelHeader
         profileVariant

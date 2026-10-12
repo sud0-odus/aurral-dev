@@ -15,6 +15,8 @@ export function AppleMusicPocModal({ onClose }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [operation, setOperation] = useState(null);
+  const [existingMatches, setExistingMatches] = useState([]);
+  const [matchStatus, setMatchStatus] = useState("idle"); // PHASE8C3_OWNER_IMPORT_LOOKUP
 
   const loadGroups = async () => {
     setBusy(true); setMessage("");
@@ -48,7 +50,7 @@ export function AppleMusicPocModal({ onClose }) {
   };
 
   const openGroup = async (id) => {
-    setBusy(true); setItems([]); setChosen(null); setTracks([]); setOperation(null);
+    setBusy(true); setItems([]); setChosen(null); setTracks([]); setExistingMatches([]); setMatchStatus("idle"); setOperation(null);
     try {
       const result = await getData("/playlists/apple-poc/group", { params: { id } });
       if (!result.ok) throw new Error(result.message || "Unable to load group");
@@ -58,17 +60,26 @@ export function AppleMusicPocModal({ onClose }) {
   };
 
   const openPlaylist = async (item) => {
-    setBusy(true); setChosen(null); setTracks([]); setOperation(null);
+    setBusy(true); setChosen(null); setTracks([]); setExistingMatches([]); setMatchStatus("idle"); setOperation(null);
     try {
       const result = await getData("/playlists/apple-poc/tracks", { params: { id: item.id } });
       if (!result.ok) throw new Error(result.message || "Unable to load playlist");
       setTracks(result.tracks || []); setHasMore(!!result.hasMore); setChosen(item); setMessage("");
+      setMatchStatus("loading");
+      try {
+        const lookup = await getData("/playlists/apple-poc/imported", { params: { name: item.name } });
+        setExistingMatches(Array.isArray(lookup.matches) ? lookup.matches : []);
+        setMatchStatus("ready");
+      } catch (lookupError) {
+        setMatchStatus("error");
+        setMessage("Unable to check existing playlists. Import is disabled until the check succeeds.");
+      }
     } catch (e) { setMessage(readError(e)); }
     finally { setBusy(false); }
   };
 
   const importPlaylist = async () => {
-    if (!chosen || hasMore || !tracks.length) return;
+    if (!chosen || hasMore || !tracks.length || matchStatus !== "ready" || existingMatches.length) return;
     setBusy(true); setMessage("");
     try {
       const payload = { name: chosen.name || "Apple Music Playlist", sourceName: "Apple Music", tracks: tracks.filter(t => t.artist && t.title).map(t => ({ artistName: t.artist, trackName: t.title, albumName: t.album })) };
@@ -149,7 +160,14 @@ export function AppleMusicPocModal({ onClose }) {
           <p className="apple-p5__note" style={{margin:0}}>Scroll inside the track list to review all loaded tracks. {hasMore ? "Apple supplied a next-page link; the full total has not been verified." : "No next-page link was returned."}</p>
           <ol className="apple-p5__tracklist" tabIndex={0} aria-label="Scrollable Apple Music track preview">{tracks.map((t,i)=><li key={`${t.id}-${i}`}>{t.artist} — {t.title}</li>)}</ol>
           {hasMore && <p className="apple-p5__note">Apple returned a next-page link. Only the first {tracks.length} tracks have been loaded; total playlist size is unknown. Import remains disabled until all pages are retrieved.</p>}
-          <div className="apple-p5__row" style={{position:"sticky",bottom:0,background:"var(--bg-primary, #222)",padding:"7px 0",zIndex:1}}><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || hasMore || !tracks.length || operation != null} onClick={importPlaylist}>{operation != null ? `Import queued (operation #${operation})` : "Import playlist into Aurral"}</button></div>
+          {matchStatus === "loading" && <p className="apple-p5__note">Checking your imported playlists…</p>}
+          {matchStatus === "error" && <p role="alert" className="apple-p5__note">Existing playlist check failed. Import blocked.</p>}
+          {existingMatches.length > 0 && <div className="apple-p5__feedback">
+            <strong>Already imported (name match)</strong>
+            <p className="apple-p5__note">Found {existingMatches.length} Apple Music playlist{existingMatches.length === 1 ? "" : "s"} with this name in your Aurral account. Tracks have not been compared.</p>
+            {existingMatches.map((match) => <p key={match.id}><a className="settings-page__link" href={`/library/playlists/${encodeURIComponent(match.id)}`} target="_blank" rel="noopener noreferrer">View {match.name} in Aurral ({match.trackCount} tracks)</a></p>)}
+          </div>}
+          <div className="apple-p5__row" style={{position:"sticky",bottom:0,background:"var(--bg-primary, #222)",padding:"7px 0",zIndex:1}}><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || hasMore || !tracks.length || operation != null || matchStatus !== "ready" || existingMatches.length > 0} onClick={importPlaylist}>{operation != null ? `Import queued (operation #${operation})` : "Import playlist into Aurral"}</button></div>
         </section>}
       </div>
     </SettingsIntegrationModal>

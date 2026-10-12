@@ -4,10 +4,10 @@ import json, os, ssl, threading, time, re, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
-HOST=os.environ.get('APPLE_POC_HOST','0.0.0.0')
+HOST=os.environ.get('APPLE_POC_HOST','127.0.0.1')
 PORT=int(os.environ.get('APPLE_POC_PORT','3333'))
 TTL=3600
-state={'headers':None,'expires':0}
+state={}  # user ID -> {headers, expires}; memory-only
 lock=threading.RLock()
 HTML='''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aurral Apple Music POC</title><style>body{font:16px system-ui;background:#121519;color:#f4f6f8;max-width:850px;margin:40px auto;padding:18px}section{border:1px solid #414854;border-radius:12px;padding:20px;margin:16px 0}button{background:#d94462;color:white;border:0;padding:12px 18px;border-radius:7px;cursor:pointer}textarea{width:100%;box-sizing:border-box;min-height:100px;background:#20262d;color:white;padding:10px}#result{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#b2beca}</style></head><body><h1>Apple Music ↔ Aurral (POC)</h1><p>Temporary proof of concept. Apple sign-in stays on your Windows PC. Paste only the two Apple Music request headers below; they stay in CT102 process memory for up to one hour.</p><section><label>Apple Music request headers (JSON, Authorization and Music-User-Token)<textarea id="headers" placeholder='{"Authorization":"Bearer ...","Music-User-Token":"..."}'></textarea></label><p><button id="connect">Test Apple connection & recommendations</button> <button id="disconnect">Disconnect</button></p><small>No credentials written to disk. Disconnect or service restart clears them. Never paste them into chat.</small></section><section><h2>Results</h2><div id="result">Not connected</div></section><section><h2>Explore Apple recommendations</h2><p><button id="groups">Load groups</button></p><div id="groupsResult"></div><h3>Selected group</h3><div id="groupResult"></div><h3>Playlist tracks</h3><div id="tracksResult"></div><p><button id="export" disabled>Download for Aurral JSON import</button></p><small>Download the selected playlist as Aurral-compatible JSON. Import it from Aurral's Library → Playlists → Import playlist → JSON file. The POC does not start downloads.</small></section><script>const r=document.getElementById('result');document.getElementById('connect').onclick=async()=>{r.textContent='Contacting Apple...';try{const h=JSON.parse(document.getElementById('headers').value);document.getElementById('headers').value='';const x=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(h)});const j=await x.json();r.textContent=JSON.stringify(j,null,2)}catch(e){r.textContent='Error: '+e.message}};document.getElementById('disconnect').onclick=async()=>{const x=await fetch('/api/disconnect',{method:'POST'});r.textContent=JSON.stringify(await x.json());document.getElementById('headers').value='';document.getElementById('groupsResult').replaceChildren();document.getElementById('groupResult').replaceChildren();document.getElementById('tracksResult').replaceChildren();selectedPlaylist=null;exportButton.disabled=true};
 const groups=document.getElementById('groupsResult'), group=document.getElementById('groupResult'), tracks=document.getElementById('tracksResult');let selectedPlaylist=null, selectedName='';const exportButton=document.getElementById('export');exportButton.onclick=()=>{if(selectedPlaylist)window.location.href='/api/export?id='+encodeURIComponent(selectedPlaylist)+'&name='+encodeURIComponent(selectedName)};
@@ -85,24 +85,64 @@ def group_items(headers,group_id):
     return {'ok':True,'http':result['http'],'items':items,'total':len(items),'group':group_id}
 
 def playlist_tracks(headers,playlist_id):
-    if not VALID_PLAYLIST.fullmatch(playlist_id):return {'ok':False,'message':'Invalid catalog playlist ID'}
-    path='/v1/catalog/us/playlists/'+quote(playlist_id,safe='')+'/tracks?platform=web&limit=100'
-    result=api_json(path,headers)
-    if not result['ok']:return result
-    obj=result['body'];raw=obj.get('data') or []
+    if not VALID_PLAYLIST.fullmatch(playlist_id):
+        return {'ok':False,'message':'Invalid catalog playlist ID'}
+    base='/v1/catalog/us/playlists/'+quote(playlist_id,safe='')+'/tracks'
+    path=base+'?platform=web&limit=100'
     tracks=[]
-    for item in raw:
-        if not isinstance(item,dict):continue
-        attrs=item.get('attributes') or {}
-        tracks.append({'id':str(item.get('id') or '')[:100],'title':display_name(attrs),'artist':str(attrs.get('artistName') or '')[:180],'album':str(attrs.get('albumName') or '')[:180],'durationMs':attrs.get('durationInMillis')})
-    return {'ok':True,'http':result['http'],'playlist':playlist_id,'tracks':tracks,'total':len(tracks),'hasMore':bool(obj.get('next'))}
+    visited=set()
+    max_pages=30
+    max_tracks=3000
+    for page_number in range(1,max_pages+1):
+        if path in visited:
+            return {'ok':False,'message':'Apple pagination repeated a page; import blocked'}
+        visited.add(path)
+        result=api_json(path,headers)
+        if not result['ok']:
+            return {'ok':False,'message':'Apple playlist page '+str(page_number)+' failed; import blocked','http':result.get('http',502)}
+        obj=result.get('body') or {}
+        raw=obj.get('data')
+        if not isinstance(raw,list):
+            return {'ok':False,'message':'Apple playlist returned an invalid page; import blocked'}
+        for item in raw:
+            if not isinstance(item,dict):
+                return {'ok':False,'message':'Apple playlist returned an invalid track; import blocked'}
+            attrs=item.get('attributes') or {}
+            tracks.append({'id':str(item.get('id') or '')[:100],'title':display_name(attrs),'artist':str(attrs.get('artistName') or '')[:180],'album':str(attrs.get('albumName') or '')[:180],'durationMs':attrs.get('durationInMillis')})
+        if len(tracks)>max_tracks:
+            return {'ok':False,'message':'Apple playlist exceeds the 3000-track safety limit; import blocked'}
+        next_page=obj.get('next')
+        if not next_page:
+            return {'ok':True,'http':result['http'],'playlist':playlist_id,'tracks':tracks,'total':len(tracks),'hasMore':False}
+        if not isinstance(next_page,str):
+            return {'ok':False,'message':'Apple playlist pagination link invalid; import blocked'}
+        parsed=urlparse(next_page)
+        if parsed.scheme or parsed.netloc:
+            if parsed.scheme!='https' or parsed.netloc!='amp-api.music.apple.com':
+                return {'ok':False,'message':'Apple pagination changed host; import blocked'}
+        if parsed.path!=base or not parsed.query or parsed.fragment:
+            return {'ok':False,'message':'Apple pagination path invalid; import blocked'}
+        path=parsed.path+'?'+parsed.query
+    return {'ok':False,'message':'Apple playlist exceeds the 30-page safety limit; import blocked'}
 
-def active_headers():
+def requesting_user(handler):
+    # Bridge accepts only the local Aurral backend. Never trust browser-supplied user IDs.
+    if handler.client_address[0] not in ('127.0.0.1', '::1'):
+        return None
+    value = handler.headers.get('X-Aurral-User-Id', '')
+    if not value.isdecimal() or not (1 <= int(value) <= 2147483647):
+        return None
+    return str(int(value))
+
+def active_headers(user_id):
     with lock:
-        if time.time()>=state['expires']:
-            state['headers']=None
+        entry = state.get(user_id)
+        if not entry:
             return None
-        return dict(state['headers']) if state['headers'] else None
+        if time.time() >= entry['expires']:
+            state.pop(user_id, None)
+            return None
+        return dict(entry['headers'])
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -116,7 +156,9 @@ class Handler(BaseHTTPRequestHandler):
             data=HTML.encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
         elif urlparse(self.path).path=='/health':self.reply({'ok':True,'service':'apple-music-poc-v3'})
         elif urlparse(self.path).path in ('/api/groups','/api/group','/api/tracks','/api/export'):
-            headers=active_headers()
+            user_id=requesting_user(self)
+            if not user_id:return self.reply({'error':'Authorized Aurral user required'},403)
+            headers=active_headers(user_id)
             if not headers:return self.reply({'ok':False,'message':'Connect again to browse recommendations'},401)
             uri=urlparse(self.path);args=parse_qs(uri.query)
             if uri.path=='/api/groups':
@@ -146,9 +188,11 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(result,200 if result.get('ok') else 400)
         else:self.reply({'error':'not found'},404)
     def do_POST(self):
+        user_id=requesting_user(self)
+        if not user_id:return self.reply({'error':'Authorized Aurral user required'},403)
         if self.path=='/api/disconnect':
-            with lock:state['headers']=None;state['expires']=0
-            return self.reply({'ok':True,'message':'Session cleared from CT102 memory.'})
+            with lock:state.pop(user_id, None)
+            return self.reply({'ok':True,'message':'Your temporary Apple Music session was cleared.'})
         if self.path!='/api/connect':return self.reply({'error':'not found'},404)
         if self.headers.get('Content-Type','').split(';')[0]!='application/json':return self.reply({'error':'JSON expected'},400)
         try:
@@ -159,10 +203,10 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(auth,str) or not auth.startswith('Bearer ') or not isinstance(user,str) or len(user)<10:
                 return self.reply({'error':'Expected Authorization and Music-User-Token from applemusic-mcp get_headers().'},400)
             headers={'Authorization':auth,'Music-User-Token':user}
-            with lock:state['headers']=headers;state['expires']=time.time()+TTL
+            with lock:state[user_id]={'headers':headers,'expires':time.time()+TTL}
             outcome=get_recommendations(headers)
             if not outcome.get('ok'):
-                with lock:state['headers']=None;state['expires']=0
+                with lock:state.pop(user_id, None)
             return self.reply(outcome)
         except (ValueError,KeyError,TypeError):return self.reply({'error':'invalid JSON'},400)
 
