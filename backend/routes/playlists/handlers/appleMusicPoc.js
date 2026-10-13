@@ -154,9 +154,10 @@ export function registerAppleMusicPoc(router) {
 
   router.get("/apple-poc/:action", async (req, res) => {
     const action = req.params.action;
-    if (!["groups", "group", "tracks"].includes(action)) return res.status(404).json({ error: "Not found" });
+    if (!["groups", "group", "tracks", "library-playlists", "library-tracks"].includes(action)) return res.status(404).json({ error: "Not found" });
     const id = typeof req.query.id === "string" ? req.query.id : "";
     if (action === "group" && !/^[A-Za-z0-9_-]{1,100}$/.test(id)) return res.status(400).json({ error: "Invalid group ID" });
+    if (action === "library-tracks" && !/^[A-Za-z0-9._-]{1,120}$/.test(id)) return res.status(400).json({ error: "Invalid personal playlist ID" });
     if (action === "tracks" && !/^pl\.[A-Za-z0-9_.-]{1,100}$/.test(id)) return res.status(400).json({ error: "Invalid playlist ID" });
     try {
       const path = `/api/${action}${action === "groups" ? "" : `?id=${encodeURIComponent(id)}`}`;

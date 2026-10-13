@@ -125,6 +125,90 @@ def playlist_tracks(headers,playlist_id):
         path=parsed.path+'?'+parsed.query
     return {'ok':False,'message':'Apple playlist exceeds the 30-page safety limit; import blocked'}
 
+def library_playlists(headers):
+    # Read-only, paginated personal library list. Never expose Apple headers.
+    base='/v1/me/library/playlists'
+    path=base+'?limit=100'
+    entries=[]
+    seen=set()
+    for page in range(30):
+        if path in seen:
+            return {'ok':False,'message':'Repeated Apple library page; scan incomplete'}
+        seen.add(path)
+        result=api_json(path,headers)
+        if not result['ok']:
+            return {'ok':False,'http':result.get('http'), 'message':'Apple library playlists unavailable', 'items':[]}
+        body=result.get('body') or {}
+        data=body.get('data')
+        if not isinstance(data,list):
+            return {'ok':False,'message':'Apple library returned invalid data'}
+        for item in data:
+            if not isinstance(item,dict):continue
+            attrs=item.get('attributes') or {}
+            pid=str(item.get('id') or '')[:120]
+            catalog_id=str((attrs.get('playParams') or {}).get('catalogId') or '')[:120]
+            entries.append({'id':pid,'catalogId':catalog_id,'name':display_name(attrs),'type':str(item.get('type') or '')[:50]})
+        if len(entries)>3000:
+            return {'ok':False,'message':'Playlist scan safety limit exceeded'}
+        next_url=body.get('next')
+        if not next_url:
+            return {'ok':True,'items':entries,'total':len(entries),'hasMore':False}
+        if not isinstance(next_url,str):return {'ok':False,'message':'Invalid next page'}
+        parsed=urlparse(next_url)
+        if parsed.scheme or parsed.netloc:
+            if parsed.scheme!='https' or parsed.netloc!='amp-api.music.apple.com':
+                return {'ok':False,'message':'Unexpected next-page host'}
+        if parsed.path!=base or not parsed.query or parsed.fragment:
+            return {'ok':False,'message':'Unexpected next-page path'}
+        path=parsed.path+'?'+parsed.query
+    return {'ok':False,'message':'Too many Apple library pages'}
+
+# Library playlists can have p.* identifiers and may contain library-song records.
+VALID_LIBRARY_PLAYLIST=re.compile(r'^[A-Za-z0-9._-]{1,120}$')
+
+def library_playlist_tracks(headers,playlist_id):
+    if not VALID_LIBRARY_PLAYLIST.fullmatch(playlist_id):
+        return {'ok':False,'message':'Invalid library playlist ID'}
+    base='/v1/me/library/playlists/'+quote(playlist_id,safe='')+'/tracks'
+    path=base+'?limit=100'
+    tracks=[]
+    visited=set()
+    for page in range(30):
+        if path in visited:
+            return {'ok':False,'message':'Repeated library track page; import blocked'}
+        visited.add(path)
+        response=api_json(path,headers)
+        if not response['ok']:
+            return {'ok':False,'http':response.get('http',502),'message':'Apple library tracks unavailable; import blocked'}
+        body=response.get('body') or {}
+        entries=body.get('data')
+        if not isinstance(entries,list):
+            return {'ok':False,'message':'Invalid library track page; import blocked'}
+        for entry in entries:
+            if not isinstance(entry,dict):
+                return {'ok':False,'message':'Invalid library track; import blocked'}
+            attrs=entry.get('attributes') or {}
+            tracks.append({'id':str(entry.get('id') or '')[:100],
+                           'title':display_name(attrs),
+                           'artist':str(attrs.get('artistName') or '')[:180],
+                           'album':str(attrs.get('albumName') or '')[:180],
+                           'durationMs':attrs.get('durationInMillis')})
+        if len(tracks)>3000:
+            return {'ok':False,'message':'Library playlist exceeds 3000 tracks; import blocked'}
+        next_page=body.get('next')
+        if not next_page:
+            return {'ok':True,'tracks':tracks,'total':len(tracks),'hasMore':False,'playlist':playlist_id}
+        if not isinstance(next_page,str):
+            return {'ok':False,'message':'Invalid library pagination; import blocked'}
+        parsed=urlparse(next_page)
+        if parsed.scheme or parsed.netloc:
+            if parsed.scheme!='https' or parsed.netloc!='amp-api.music.apple.com':
+                return {'ok':False,'message':'Unexpected pagination host; import blocked'}
+        if parsed.path!=base or not parsed.query or parsed.fragment:
+            return {'ok':False,'message':'Unexpected pagination path; import blocked'}
+        path=parsed.path+'?'+parsed.query
+    return {'ok':False,'message':'Library playlist exceeds 30 pages; import blocked'}
+
 def requesting_user(handler):
     # Bridge accepts only the local Aurral backend. Never trust browser-supplied user IDs.
     if handler.client_address[0] not in ('127.0.0.1', '::1'):
@@ -155,13 +239,17 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path=='/':
             data=HTML.encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
         elif urlparse(self.path).path=='/health':self.reply({'ok':True,'service':'apple-music-poc-v3'})
-        elif urlparse(self.path).path in ('/api/groups','/api/group','/api/tracks','/api/export'):
+        elif urlparse(self.path).path in ('/api/groups','/api/group','/api/tracks','/api/export','/api/library-playlists','/api/library-tracks'):
             user_id=requesting_user(self)
             if not user_id:return self.reply({'error':'Authorized Aurral user required'},403)
             headers=active_headers(user_id)
             if not headers:return self.reply({'ok':False,'message':'Connect again to browse recommendations'},401)
             uri=urlparse(self.path);args=parse_qs(uri.query)
-            if uri.path=='/api/groups':
+            if uri.path=='/api/library-playlists':
+                result=library_playlists(headers)
+            elif uri.path=='/api/library-tracks':
+                result=library_playlist_tracks(headers,(args.get('id') or [''])[0])
+            elif uri.path=='/api/groups':
                 result=get_recommendations(headers)
             elif uri.path=='/api/group':
                 result=group_items(headers,(args.get('id') or [''])[0])

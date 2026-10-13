@@ -10,13 +10,21 @@ import {
 import { canAccessPlaylistType } from "./utils.js";
 import { flowPlaylistConfig } from "../../../services/playlists/flowPlaylistConfig.js";
 
-const canAccessJob = (user, job) =>
-  canAccessPlaylistType(user, job.playlistType) ||
-  flowPlaylistConfig.getStaticPlaylistsForUser(user).some((playlist) =>
+const canAccessJob = (user, job) => {
+  if (canAccessPlaylistType(user, job.playlistType)) return true;
+  // A playlist's download jobs may predate canonicalJobId membership links.
+  // An invited viewer may stream a job owned by that specific shared playlist.
+  const owningPlaylist = flowPlaylistConfig.getStaticPlaylist(job.playlistType);
+  if (owningPlaylist && flowPlaylistConfig.canUserViewStaticPlaylist(user, owningPlaylist)) {
+    return true;
+  }
+  // A job owned by another source can also be referenced by an accessible playlist.
+  return flowPlaylistConfig.getStaticPlaylistsForUser(user).some((playlist) =>
     playlist.tracks?.some(
       (track) => String(track?.canonicalJobId || "") === String(job.id || ""),
     ),
   );
+};
 
 export function registerStream(router) {
   router.get("/stream/:jobId", noCache, async (req, res) => {

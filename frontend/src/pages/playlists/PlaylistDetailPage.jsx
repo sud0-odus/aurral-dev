@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { Clock, Download, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { Clock, Download, Pencil, RefreshCw, Share2, Trash2 } from "lucide-react";
 import { DotLoader } from "../../components/DotLoader";
 import { SkeletonCollectionHeader, SkeletonRows, SkeletonStatus } from "../../components/Skeletons";
 import { CollectionHeader, CollectionPage, CollectionPlayButtons } from "../../components/CollectionHeader";
@@ -18,6 +18,7 @@ import {
   updateStaticPlaylist,
 } from "../../utils/api/endpoints/playlists.js";
 import { getApiErrorMessage } from "../onboardingUtils.jsx";
+import { getData, putData } from "../../utils/api/core.js";
 import { ConfirmModal } from "../../components/ConfirmModal.jsx";
 import { PlaylistArtworkThumb } from "./components/PlaylistArtworkThumb.jsx";
 import { getStaticPlaylistTrackCount } from "./playlistStats";
@@ -108,6 +109,19 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
   const { user } = useAuth();
   const { showSuccess, showError } = useToast();
   const { artworkUrlFor } = usePlaylistArtwork();
+  // PHASE8E9_SHARE_SUMMARY: show recipients only to owner/admin.
+  const [sharedWith, setSharedWith] = useState([]);
+  const canManageSharingSummary = user?.role === "admin" ||
+    (playlist.ownerUserId != null && Number(playlist.ownerUserId) === Number(user?.id));
+  useEffect(() => {
+    let cancelled = false;
+    setSharedWith([]);
+    if (!canManageSharingSummary) return undefined;
+    getData(`/playlists/shared-playlists/${encodeURIComponent(playlist.id)}/share-summary`)
+      .then(data => { if (!cancelled) setSharedWith(Array.isArray(data?.recipients) ? data.recipients : []); })
+      .catch(() => { if (!cancelled) setSharedWith([]); });
+    return () => { cancelled = true; };
+  }, [canManageSharingSummary, playlist.id, playlist.viewerUserIds?.join(",")]);
   const showTrackAvailability = playlist.showTrackAvailability === true;
   const { tracks: savedTracks, loading, error, refresh } = usePlaylistTracks(playlist.id, {
     pollAvailability: showTrackAvailability,
@@ -130,6 +144,7 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false); // PHASE8E5_SHARE_UI
 
   const importSource = playlist.importSource || null;
   const isSyncable = SYNCABLE_IMPORT_PROVIDERS.has(importSource?.provider);
@@ -143,8 +158,12 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
       ? `${countAvailableTracks(tracks)}/${totalTracks} available`
       : formatTrackTotal(totalTracks);
   const owner = playlist.ownerUsername || user?.username || null;
+  const mayManageSharing = user?.role === "admin" || (playlist.ownerUserId != null && Number(playlist.ownerUserId) === Number(user?.id));
   const syncInterval = importSource?.syncIntervalHours ?? 0;
   const metaParts = [owner, trackLabel];
+  if (canManageSharingSummary && sharedWith.length) {
+    metaParts.push(`Shared with ${sharedWith.map(u => u.username).join(", ")}`);
+  }
   if (isSyncable) {
     metaParts.push(
       importSource?.syncEnabled === true
@@ -321,6 +340,10 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
                   icon: Pencil,
                   onSelect: () => setEditOpen(true),
                 },
+                ...(mayManageSharing ? [{
+                  id: "share", label: "Share playlist", icon: Share2,
+                  onSelect: () => setSharingOpen(true),
+                }] : []),
                 {
                   id: "export",
                   label: "Export tracklist",
@@ -393,6 +416,7 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
         recordHistory={playlist.recordHistory !== false}
       />
 
+      {mayManageSharing && sharingOpen && <PlaylistSharingEditor playlist={playlist} onClose={() => setSharingOpen(false)} showSuccess={showSuccess} />}
       <PlaylistEditModal
         entry={playlist}
         title="Edit playlist"
@@ -417,4 +441,56 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
       />
     </CollectionPage>
   );
+}
+
+
+// PHASE8E5_SHARE_UI: share changes are opt-in and constrained by the server to owner/admin.
+function PlaylistSharingEditor({ playlist, onClose, showSuccess }) {
+  const [users, setUsers] = useState([]);
+  const [selected, setSelected] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  // Fetch once on mount. Server returns the eligible recipient roster, no credentials.
+  // Mount-only effect is safe because the parent uses a stable playlist detail identity.
+  useEffect(() => {
+    let alive = true;
+    getData(`/playlists/shared-playlists/${encodeURIComponent(playlist.id)}/sharing`)
+      .then(data => { if (alive) {
+        setUsers(Array.isArray(data.users) ? data.users : []);
+        setSelected(Array.isArray(data.viewers) ? data.viewers.map(Number) : []);
+        setLoaded(true);
+      } })
+      .catch(err => { if (alive) setError(err.response?.data?.error || err.message || "Could not load sharing settings"); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [playlist.id]);
+  const save = async () => {
+    if (!loaded || saving) return;
+    setSaving(true); setError("");
+    try {
+      await putData(`/playlists/shared-playlists/${encodeURIComponent(playlist.id)}/sharing`, { viewerUserIds: selected });
+      showSuccess("Playlist sharing updated");
+      onClose();
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || "Could not save sharing settings");
+    } finally { setSaving(false); }
+  };
+  return <div role="presentation" style={{position:"fixed",inset:0,zIndex:1500,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",padding:16}}>
+    <section role="dialog" aria-modal="true" aria-label={`Share ${playlist.name}`} style={{width:"min(460px,100%)",border:"1px solid var(--border-color,#555)",borderRadius:12,background:"var(--bg-primary,#1e1e26)",padding:20,color:"inherit"}}>
+      <h2 style={{marginTop:0}}>Share {playlist.name}</h2>
+      <p>Select Aurral users who can view and play this playlist. You remain the owner; recipients cannot edit or delete it.</p>
+      {loading && <p role="status">Loading users…</p>}
+      {error && <p role="alert" style={{color:"#f99"}}>{error}</p>}
+      {loaded && <div style={{display:"grid",gap:10,margin:"16px 0"}}>{users.map(person => <label key={person.id} style={{display:"flex",gap:10,alignItems:"center"}}>
+        <input type="checkbox" checked={selected.includes(Number(person.id))} disabled={saving} onChange={e => setSelected(previous => e.target.checked ? [...previous,Number(person.id)] : previous.filter(id => id !== Number(person.id)))} />
+        {person.username}
+      </label>)}{users.length === 0 && <p>No eligible active users.</p>}</div>}
+      <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:16}}>
+        <button type="button" className="btn btn-secondary" disabled={saving} onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-primary" disabled={!loaded || saving} onClick={save}>{saving ? "Saving…" : "Save sharing"}</button>
+      </div>
+    </section>
+  </div>;
 }

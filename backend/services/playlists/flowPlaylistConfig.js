@@ -1,3 +1,4 @@
+import { userOps } from "../../db/helpers/index.js"; // PHASE8E10_SHARE_INBOX
 import { randomBytes, randomUUID } from "crypto";
 import { dbOps } from "../../db/helpers/index.js";
 import { downloadTracker } from "../downloadJobs/downloadTracker.js";
@@ -42,6 +43,12 @@ const normalizeOwnerUserId = (value) => {
   const userId = Number(value);
   return Number.isSafeInteger(userId) && userId > 0 ? userId : null;
 };
+
+// Invitations are explicit positive user IDs. Never grant access through invalid values.
+const normalizePlaylistViewers = (values, ownerUserId) =>
+  [...new Set((Array.isArray(values) ? values : [])
+    .map(normalizeOwnerUserId)
+    .filter((id) => id != null && id !== ownerUserId))];
 
 export const normalizeYearBound = (value) => {
   if (value == null || value === "") return null;
@@ -507,6 +514,7 @@ const normalizeStaticPlaylist = (playlist) => {
     id: playlist?.id || randomUUID(),
     name: name || "Playlist",
     ownerUserId: normalizeOwnerUserId(playlist?.ownerUserId),
+    viewerUserIds: normalizePlaylistViewers(playlist?.viewerUserIds, normalizeOwnerUserId(playlist?.ownerUserId)),
     sourceName: String(playlist?.sourceName || "").trim() || null,
     sourceFlowId: String(playlist?.sourceFlowId || "").trim() || null,
     discoverPresetId: String(playlist?.discoverPresetId || "").trim() || null,
@@ -691,8 +699,21 @@ export const flowPlaylistConfig = {
     return canUserAccessOwnerScopedEntity(user, flow?.ownerUserId ?? null);
   },
 
-  canUserAccessStaticPlaylist(user, playlist) {
+  // Management remains owner/admin only.
+  canUserManageStaticPlaylist(user, playlist) {
     return canUserAccessOwnerScopedEntity(user, playlist?.ownerUserId ?? null);
+  },
+
+  // Invited listeners can view but cannot manage another user's playlist.
+  canUserViewStaticPlaylist(user, playlist) {
+    if (this.canUserManageStaticPlaylist(user, playlist)) return true;
+    const userId = normalizeOwnerUserId(user?.id);
+    return userId != null && Array.isArray(playlist?.viewerUserIds) &&
+      playlist.viewerUserIds.includes(userId);
+  },
+
+  canUserAccessStaticPlaylist(user, playlist) {
+    return this.canUserManageStaticPlaylist(user, playlist);
   },
 
   getFlows() {
@@ -920,7 +941,7 @@ export const flowPlaylistConfig = {
 
   getStaticPlaylistsForUser(user) {
     return getStoredStaticPlaylists().filter((playlist) =>
-      this.canUserAccessStaticPlaylist(user, playlist),
+      this.canUserViewStaticPlaylist(user, playlist),
     );
   },
 
@@ -934,7 +955,12 @@ export const flowPlaylistConfig = {
 
   getStaticPlaylistForUser(user, playlistId) {
     const playlist = this.getStaticPlaylist(playlistId);
-    return this.canUserAccessStaticPlaylist(user, playlist) ? playlist : null;
+    return this.canUserViewStaticPlaylist(user, playlist) ? playlist : null;
+  },
+
+  getManageableStaticPlaylistForUser(user, playlistId) {
+    const playlist = this.getStaticPlaylist(playlistId);
+    return this.canUserManageStaticPlaylist(user, playlist) ? playlist : null;
   },
 
   createStaticPlaylist({
@@ -1011,6 +1037,10 @@ export const flowPlaylistConfig = {
     const next = normalizeStaticPlaylist({
       ...current,
       name: nextName,
+      // Invitation changes require a dedicated, owner-validated route (8E.4).
+      viewerUserIds: updates?.viewerUserIds !== undefined
+        ? updates.viewerUserIds
+        : current.viewerUserIds,
       sourceName: updates?.sourceName ?? current.sourceName,
       description: updates?.description !== undefined ? updates.description : current.description,
       recordHistory:
@@ -1033,6 +1063,29 @@ export const flowPlaylistConfig = {
     });
     playlists[index] = next;
     setStaticPlaylists(playlists);
+    // PHASE8E10_SHARE_INBOX: notify only newly added viewers after persistence.
+    const previousViewerIds = new Set(Array.isArray(current.viewerUserIds) ? current.viewerUserIds.map(Number) : []);
+    const currentViewerIds = Array.isArray(next.viewerUserIds) ? next.viewerUserIds.map(Number) : [];
+    for (const viewerId of currentViewerIds) {
+      if (!Number.isSafeInteger(viewerId) || viewerId <= 0 || previousViewerIds.has(viewerId)) continue;
+      try {
+        const owner = userOps.getUserById(Number(current.ownerUserId));
+        const recipient = userOps.getUserById(viewerId);
+        if (!recipient || recipient.status !== "active") continue;
+        dbOps.upsertInboxItem({
+          userId: viewerId,
+          kind: "playlistShare",
+          sourceKey: String(current.id) + ":" + String(Date.now()),
+          title: (owner?.username || "A user") + " shared a playlist with you",
+          subtitle: String(next.name || "Playlist"),
+          href: "/library/playlists/" + encodeURIComponent(String(current.id)),
+          metadata: { playlistId: String(current.id), ownerUserId: Number(current.ownerUserId) },
+        });
+      } catch (error) {
+        console.error("Playlist sharing inbox notification failed", error?.message || "unknown error");
+      }
+    }
+
     import("../unifiedSearchService.js").then(({ clearSearchContextCache }) => clearSearchContextCache()).catch(() => {});
     return next;
   },

@@ -22,6 +22,7 @@ import {
   filterJobsForUser,
   pauseStaticPlaylistRetryCycle,
   getAccessibleStaticPlaylist,
+  canViewPlaylistType,
 } from "./utils.js";
 import {
   approveBlockedJob,
@@ -117,7 +118,7 @@ export function registerJobs(router) {
 
   router.get("/jobs/:playlistId", noCache, async (req, res) => {
     const { playlistId } = req.params;
-    if (!canAccessPlaylistType(req.user, playlistId)) {
+    if (!canViewPlaylistType(req.user, playlistId)) {
       return res.status(404).json({ error: "Playlist not found" });
     }
     const rawLimit =
@@ -152,7 +153,9 @@ export function registerJobs(router) {
       );
     }
     const profile = getQualityProfile();
-    const accessibleJobs = filterJobsForUser(req.user, jobs).map((job) =>
+    // This read endpoint already checked access to playlistId. Do not re-filter
+    // invited users' tracks through the owner-only job mutation guard.
+    const accessibleJobs = jobs.map((job) =>
       decorateJobQuality(job, profile),
     );
     const libraryOwnership = getLibraryTrackOwnershipBatch(accessibleJobs);

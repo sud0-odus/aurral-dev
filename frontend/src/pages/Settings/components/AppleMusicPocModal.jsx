@@ -8,6 +8,7 @@ export function AppleMusicPocModal({ onClose }) {
   const [headers, setHeaders] = useState("");
   const [connected, setConnected] = useState(false);
   const [groups, setGroups] = useState([]);
+  const [libraryPlaylists, setLibraryPlaylists] = useState([]);
   const [items, setItems] = useState([]);
   const [chosen, setChosen] = useState(null);
   const [tracks, setTracks] = useState([]);
@@ -56,7 +57,7 @@ export function AppleMusicPocModal({ onClose }) {
     for (const row of imported) {
       if (row.matches.length !== 1) { next[row.id] = { status: "ambiguous-playlist" }; continue; }
       try {
-        const apple = await getData("/playlists/apple-poc/tracks", { params: { id: row.id } });
+        const apple = await getData(row.source === "library" ? "/playlists/apple-poc/library-tracks" : "/playlists/apple-poc/tracks", { params: { id: row.id } });
         if (!apple.ok || apple.hasMore || !Array.isArray(apple.tracks)) { next[row.id] = { status: "incomplete" }; continue; }
         const result = await postData("/playlists/apple-poc/compare", {
           playlistId: row.matches[0].id,
@@ -77,13 +78,24 @@ export function AppleMusicPocModal({ onClose }) {
       if (!Array.isArray(owned.items)) throw new Error("Invalid Aurral inventory response");
       const names = new Map();
       const failures = [];
+      // Personal playlists are distinct from recommendation-group catalog playlists.
+      // A library result takes priority if the same playlist appears in both.
+      let personal = [];
+      try {
+        const library = await getData("/playlists/apple-poc/library-playlists");
+        if (!library.ok || !Array.isArray(library.items)) throw new Error("Invalid personal library listing");
+        personal = library.items.filter(p => p.id && p.name && p.name.trim()).map(p => ({ id:p.id, name:p.name, source:"library" }));
+        setLibraryPlaylists(personal);
+        personal.forEach(p => names.set(p.id, p));
+      } catch { failures.push("My Apple Music Playlists"); }
+      const personalNames = new Set(personal.map(p => p.name.trim().toLocaleLowerCase()));
       // One request at a time prevents flooding the temporary Apple Music bridge.
       for (const group of groups.slice(0, 20)) {
         try {
           const result = await getData("/playlists/apple-poc/group", { params: { id: group.id } });
           if (!result.ok || !Array.isArray(result.items)) throw new Error("Group request failed");
           for (const p of result.items.filter(p => p.type === "playlists" && p.id && p.name)) {
-            if (!names.has(p.id)) names.set(p.id, { id: p.id, name: p.name });
+            if (!names.has(p.id) && !personalNames.has(p.name.trim().toLocaleLowerCase())) names.set(p.id, { id: p.id, name: p.name, source:"catalog" });
           }
         } catch { failures.push(group.name || group.id); }
       }
@@ -104,6 +116,10 @@ export function AppleMusicPocModal({ onClose }) {
       const result = await getData("/playlists/apple-poc/groups");
       if (!result.ok) throw new Error(result.message || "Unable to load recommendations");
       setConnected(true); setGroups(result.items || []);
+      try {
+        const library = await getData("/playlists/apple-poc/library-playlists");
+        setLibraryPlaylists(Array.isArray(library.items) ? library.items.filter(p => p.id && p.name && p.name.trim()).map(p => ({ ...p, source:"library" })) : []);
+      } catch { setLibraryPlaylists([]); }
     } catch (e) { setConnected(false); setMessage(readError(e)); }
     finally { setBusy(false); }
   };
@@ -142,7 +158,7 @@ export function AppleMusicPocModal({ onClose }) {
   const openPlaylist = async (item) => {
     setBusy(true); setChosen(null); setTracks([]); setExistingMatches([]); setMatchStatus("idle"); setOperation(null);
     try {
-      const result = await getData("/playlists/apple-poc/tracks", { params: { id: item.id } });
+      const result = await getData(item.source === "library" ? "/playlists/apple-poc/library-tracks" : "/playlists/apple-poc/tracks", { params: { id: item.id } });
       if (!result.ok) throw new Error(result.message || "Unable to load playlist");
       setTracks(result.tracks || []); setHasMore(!!result.hasMore); setChosen(item); setMessage("");
       setMatchStatus("loading");
@@ -233,7 +249,7 @@ export function AppleMusicPocModal({ onClose }) {
               <button className="btn btn-secondary apple-p5__button" type="button" disabled={busy || scanning || comparing || !groups.length} onClick={scanInventory}>{comparing ? "Comparing…" : scanning ? "Scanning…" : "Scan & Compare"}</button>
             </div>
           </div>
-          <p className="apple-p5__note">Read-only inventory of playlists found in Apple Music recommendation groups, not your complete Apple Music library. Scan & Compare checks only already imported playlists for track differences. Your locally added tracks are preserved.</p>
+          <p className="apple-p5__note">Read-only scan of your personal Apple Music playlists plus recommendations. Scan & Compare checks imported playlists for track differences; local additions are preserved.</p>
           {restoreMessage && <p role="status" className="apple-p5__feedback">{restoreMessage}</p>}
           {comparisonError && <p role="alert" className="apple-p5__note">{comparisonError}</p>}
           {scanError && <p role="alert" className="apple-p5__note">Scan failed: {scanError}</p>}
@@ -247,7 +263,7 @@ export function AppleMusicPocModal({ onClose }) {
                 : comparisons[p.id]?.status === "ambiguous-playlist" ? "Multiple Aurral matches — review"
                 : comparisons[p.id]?.status === "failed" ? "Comparison failed — unverified"
                 : p.status}{p.matches.length === 1 && !comparisons[p.id] ? ` (${p.matches[0].trackCount} in Aurral)` : ""}</span>
-              {comparisons[p.id]?.status === "ready" && comparisons[p.id].missing > 0 && p.matches.length === 1 && <div style={{width:"100%",padding:"8px 0 10px 12px"}}>
+              {comparisons[p.id]?.status === "ready" && comparisons[p.id].missing > 0 && p.matches.length === 1 && p.source !== "library" && <div style={{width:"100%",padding:"8px 0 10px 12px"}}>
                 <strong>Missing Apple Music tracks — choose which to restore</strong>
                 {comparisons[p.id].details.map((t,i) => t.status === "missing" && <label key={`${p.id}-${i}`} style={{display:"flex",gap:8,alignItems:"center",marginTop:7}}>
                   <input type="checkbox" checked={!!restoreSelected[`${p.id}:${i}`]} onChange={e=>setRestoreSelected(prev=>({...prev,[`${p.id}:${i}`]:e.target.checked}))} />
@@ -258,6 +274,10 @@ export function AppleMusicPocModal({ onClose }) {
             </div>)}
             {!inventory.rows.length && <p className="apple-p5__note">No supported playlists discovered in these groups.</p>}
           </>}
+        </section>}
+        {connected && !!libraryPlaylists.length && <section className="apple-p5__panel">
+          <h4 className="apple-p5__title">My Apple Music Playlists</h4>
+          <div className="apple-p5__row">{libraryPlaylists.map(p => <button className="btn btn-secondary apple-p5__button" type="button" key={p.id} disabled={busy} onClick={() => openPlaylist(p)}>{p.name}</button>)}</div>
         </section>}
         {!!groups.length && <section className="apple-p5__panel">
           <h4 className="apple-p5__title">Recommendation groups</h4>

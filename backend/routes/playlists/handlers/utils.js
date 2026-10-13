@@ -160,8 +160,13 @@ export const pauseStaticPlaylistRetryCycle = async (playlistId) => {
 export const getAccessibleFlow = (user, flowId) =>
   flowPlaylistConfig.getFlowForUser(user, flowId);
 
-export const getAccessibleStaticPlaylist = (user, playlistId) =>
+// Explicit read path: invited listeners can use this after invitation support lands.
+export const getViewableStaticPlaylist = (user, playlistId) =>
   flowPlaylistConfig.getStaticPlaylistForUser(user, playlistId);
+
+// Existing mutation callers stay owner/admin only.
+export const getAccessibleStaticPlaylist = (user, playlistId) =>
+  flowPlaylistConfig.getManageableStaticPlaylistForUser(user, playlistId);
 
 export const canAccessPlaylistType = (user, playlistType) => {
   const key = String(playlistType || "").trim();
@@ -175,6 +180,16 @@ export const canAccessPlaylistType = (user, playlistType) => {
     return flowPlaylistConfig.canUserAccessStaticPlaylist(user, staticPlaylist);
   }
   return false;
+};
+
+export const canViewPlaylistType = (user, playlistType) => {
+  const key = String(playlistType || "").trim();
+  if (!key) return false;
+  const flow = flowPlaylistConfig.getFlow(key);
+  if (flow) return flowPlaylistConfig.canUserAccessFlow(user, flow);
+  const staticPlaylist = flowPlaylistConfig.getStaticPlaylist(key);
+  if (!staticPlaylist) return false;
+  return flowPlaylistConfig.canUserViewStaticPlaylist(user, staticPlaylist);
 };
 
 export const LIBRARY_JOB_TYPE = "library";

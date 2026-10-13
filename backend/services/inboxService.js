@@ -50,6 +50,7 @@ const getEnabledKinds = (preferences) =>
     news: preferences.news,
     recommendedNews: preferences.recommendedNews,
     discovery: preferences.discoveries,
+    playlistShare: true, // PHASE8E10_SHARE_INBOX
   })
     .filter(([, enabled]) => enabled)
     .map(([kind]) => kind);

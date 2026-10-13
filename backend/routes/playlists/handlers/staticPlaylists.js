@@ -1,3 +1,4 @@
+import { userOps } from "../../../db/helpers/index.js";
 import { cleanupBulkOperations, getBulkOperation } from "../../../services/playlists/bulkOperationStore.js";
 import { captureStaticPlaylistSelection, getSharedDownloadReferences } from "../../../services/playlists/trackRemoval.js";
 import { randomUUID } from "crypto";
@@ -143,6 +144,67 @@ function appleParams(req) {
 }
 
 export function registerStaticPlaylists(router) {
+  // PHASE8E9_SHARE_SUMMARY: owner/admin-only sharing roster, no authorization changes.
+  router.get("/shared-playlists/:playlistId/share-summary", (req, res) => {
+    const playlist = flowPlaylistConfig.getStaticPlaylist(req.params.playlistId);
+    if (!playlist || !flowPlaylistConfig.canUserManageStaticPlaylist(req.user, playlist)) {
+      return res.status(404).json({ error: "Playlist not found" });
+    }
+    const ids = Array.isArray(playlist.viewerUserIds) ? playlist.viewerUserIds : [];
+    const recipients = ids.map(id => userOps.getUserById(Number(id)))
+      .filter(u => u && u.status === "active")
+      .map(u => ({ id: u.id, username: u.username }));
+    return res.set("Cache-Control", "no-store").json({ recipients });
+  });
+  // PHASE8E4_INVITE_API: authenticated account-scoped, read-only roster and invite editing.
+  router.get("/shared-playlists/:playlistId/sharing", (req, res) => {
+    const playlist = flowPlaylistConfig.getStaticPlaylist(req.params.playlistId);
+    if (!playlist || !flowPlaylistConfig.canUserManageStaticPlaylist(req.user, playlist)) {
+      return res.status(404).json({ error: "Playlist not found" });
+    }
+    const ownerId = Number(playlist.ownerUserId);
+    const users = userOps.getAllUsers()
+      .filter(user => user.status === "active" && Number(user.id) !== ownerId)
+      .map(user => ({ id: Number(user.id), username: user.username }))
+      .sort((a, b) => a.username.localeCompare(b.username));
+    return res.set("Cache-Control", "no-store").json({
+      playlistId: playlist.id, ownerUserId: ownerId,
+      viewers: Array.isArray(playlist.viewerUserIds) ? playlist.viewerUserIds.map(Number) : [],
+      users,
+    });
+  });
+
+  router.put("/shared-playlists/:playlistId/sharing", (req, res) => {
+    const playlist = flowPlaylistConfig.getStaticPlaylist(req.params.playlistId);
+    if (!playlist || !flowPlaylistConfig.canUserManageStaticPlaylist(req.user, playlist)) {
+      return res.status(404).json({ error: "Playlist not found" });
+    }
+    const selected = req.body?.viewerUserIds;
+    if (!Array.isArray(selected) || selected.length > 50 ||
+        selected.some(id => !Number.isSafeInteger(id) || id < 1) ||
+        new Set(selected).size !== selected.length) {
+      return res.status(400).json({ error: "Provide up to 50 unique numeric user IDs" });
+    }
+    const ownerId = Number(playlist.ownerUserId);
+    const eligible = new Set(userOps.getAllUsers()
+      .filter(user => user.status === "active" && Number(user.id) !== ownerId)
+      .map(user => Number(user.id)));
+    if (selected.some(id => !eligible.has(id))) {
+      return res.status(400).json({ error: "One or more users are not eligible to view this playlist" });
+    }
+    // Revalidate immediately before mutation; guests never receive manage access.
+    const current = flowPlaylistConfig.getStaticPlaylist(req.params.playlistId);
+    if (!current || !flowPlaylistConfig.canUserManageStaticPlaylist(req.user, current)) {
+      return res.status(404).json({ error: "Playlist not found" });
+    }
+    const updated = flowPlaylistConfig.updateStaticPlaylist(current.id, { viewerUserIds: selected });
+    if (!updated) return res.status(404).json({ error: "Playlist not found" });
+    return res.set("Cache-Control", "no-store").json({
+      success: true, playlistId: updated.id, viewerUserIds: updated.viewerUserIds || [],
+    });
+  });
+
+
   // Aurral-owned confirmation flow; requireAuth/accessFlow already applied by parent router.
   router.get("/shared-playlists/apple-import", async (req, res) => {
     const args=appleParams(req);
