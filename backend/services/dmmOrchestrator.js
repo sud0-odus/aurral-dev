@@ -19,6 +19,7 @@ async function rd(pathname, { method = 'GET', data } = {}) {
   if (data) headers['Content-Type'] = 'application/x-www-form-urlencoded';
   const response = await fetch(`${RD}${pathname}`, { method, headers, body: data ? new URLSearchParams(data) : undefined, signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`Real-Debrid HTTP ${response.status} at ${pathname.split('/').slice(0,3).join('/')}`);
+  if (response.status === 204 && pathname.startsWith("/torrents?")) return [];
   const text = await response.text();
   return text ? JSON.parse(text) : {};
 }
@@ -43,10 +44,55 @@ async function getTorrentInfoWithRetry(id, payload) {
   throw lastError;
 }
 
+// RD_EXISTING_TORRENT_REUSE_V1
+// Reuse completed torrents belonging to the configured RD account, with exact
+// info-hash and selected file ID matching. No cross-account or public-link guessing.
+async function findExistingRealDebridLink({hash, fileId, jobId, payload}) {
+  const wanted = String(hash).toLowerCase();
+  for (let offset = 0; offset < 1000; offset += 100) {
+    if (!isPipelinePayloadActive(payload)) throw new Error('Job cancelled');
+    const torrents = await rd(`/torrents?limit=100&offset=${offset}`);
+    if (!Array.isArray(torrents)) throw new Error('Unexpected Real-Debrid torrent list response');
+    for (const torrent of torrents) {
+      if (String(torrent.hash || '').toLowerCase() !== wanted || torrent.status !== 'downloaded') continue;
+      const info = await getTorrentInfoWithRetry(torrent.id, payload);
+      if (String(info.hash || '').toLowerCase() !== wanted || info.status !== 'downloaded') continue;
+      const selected = (info.files || []).filter(f => f.selected);
+      const linkIndex = selected.findIndex(f => Number(f.id) === Number(fileId));
+      if (linkIndex < 0 || !info.links?.[linkIndex]) continue;
+      logger.info('dmm','Reusing completed Real-Debrid torrent',{jobId,torrentId:torrent.id});
+      return {link:info.links[linkIndex],name:selected[linkIndex].path || ''};
+    }
+    if (torrents.length < 100) break;
+  }
+  return null;
+}
+
 async function acquire({ hash, fileId, jobId, payload }) {
   let id;
   let preserveFailedTorrent = false; // RD_DIAGNOSTIC_PATCH_V1
   try {
+    let existing = null;
+    try {
+      existing = await findExistingRealDebridLink({hash,fileId,jobId,payload});
+    } catch (error) {
+      if (String(error.message).includes('Job cancelled')) throw error;
+      logger.warn('dmm','Existing RD lookup unavailable; using magnet flow',{jobId,error:error.message});
+    }
+    if (existing) {
+      const un = await rd('/unrestrict/link', { method:'POST', data:{link:existing.link} });
+      if (!un.download) throw new Error('Existing Real-Debrid torrent returned no download URL');
+      const dir = path.join(dmmStagingRoot(), String(jobId));
+      await fs.mkdir(dir,{recursive:true});
+      const output = path.join(dir,'track' + (path.extname(un.filename || existing.name || '') || '.flac'));
+      const resp = await fetch(un.download,{signal:AbortSignal.timeout(180000)});
+      if (!resp.ok || !resp.body) throw new Error(`Real-Debrid download HTTP ${resp.status}`);
+      const {pipeline} = await import('node:stream/promises');
+      const {Readable} = await import('node:stream');
+      const {createWriteStream} = await import('node:fs');
+      await pipeline(Readable.fromWeb(resp.body),createWriteStream(output));
+      return output;
+    }
     id = (await rd('/torrents/addMagnet', { method:'POST', data:{ magnet:`magnet:?xt=urn:btih:${hash}` }})).id;
     if (!id) throw new Error('Real-Debrid returned no torrent ID');
     const deadline = Date.now() + 8 * 60 * 1000;
