@@ -169,7 +169,29 @@ async function findReferenceDuration(album, chosen, trackName) {
   console.error('DURATION_CATALOG_CANDIDATES=apple:' + apple.length + ',deezer:' + deezer.length + ',exact_album:' + exact.length);
   throw new Error('No unambiguous independent reference duration; job not submitted (MusicBrainz, Apple and Deezer checked)');
 }
-const reference = await findReferenceDuration(album, chosen, trackName);
+// An explicit reference is permitted only with a recorded independent source.
+// This is a metadata override, not a validation bypass: the downloaded audio
+// must still pass the standard post-download identity and duration checks.
+const refArg = process.argv.indexOf('--reference-ms');
+const sourceArg = process.argv.indexOf('--reference-source');
+const hasReference = refArg >= 0 || sourceArg >= 0;
+let reference;
+if (hasReference) {
+  if (refArg < 0 || sourceArg < 0) throw new Error('Both --reference-ms and --reference-source are required');
+  const rawMs = process.argv[refArg + 1];
+  const source = process.argv[sourceArg + 1];
+  const durationMs = Number(rawMs);
+  if (!/^\d+$/.test(String(rawMs || '')) || !Number.isSafeInteger(durationMs) || durationMs < 30000 || durationMs > 3600000)
+    throw new Error('Invalid independent reference duration (milliseconds)');
+  let sourceUrl;
+  try { sourceUrl = new URL(source); } catch { throw new Error('Reference source must be an HTTPS URL'); }
+  if (sourceUrl.protocol !== 'https:' || !sourceUrl.hostname || sourceUrl.username || sourceUrl.password)
+    throw new Error('Reference source must be a public HTTPS URL without credentials');
+  reference = {ms: durationMs, method:'documented_independent_reference'};
+  console.log('DMM_REFERENCE_EVIDENCE=' + sourceUrl.origin + sourceUrl.pathname);
+} else {
+  reference = await findReferenceDuration(album, chosen, trackName);
+}
 console.log('DMM_REFERENCE_DURATION_MS=' + reference.ms);
 console.log('DMM_DURATION_SOURCE=' + reference.method);
 const jobId = downloadTracker.addJob({

@@ -48,7 +48,7 @@ async function acquire({ hash, fileId, jobId, payload }) {
   try {
     id = (await rd('/torrents/addMagnet', { method:'POST', data:{ magnet:`magnet:?xt=urn:btih:${hash}` }})).id;
     if (!id) throw new Error('Real-Debrid returned no torrent ID');
-    const deadline = Date.now() + 90000;
+    const deadline = Date.now() + 8 * 60 * 1000;
     let info;
     do {
       if (!isPipelinePayloadActive(payload)) throw new Error('Job cancelled');
@@ -59,14 +59,21 @@ async function acquire({ hash, fileId, jobId, payload }) {
     const match = info?.files?.find(f => Number(f.id) === Number(fileId));
     if (!match) throw new Error('Real-Debrid file ID did not match DMM');
     await rd(`/torrents/selectFiles/${encodeURIComponent(id)}`, { method:'POST', data:{ files:String(fileId) }});
+    let lastLoggedStatus = '';
+    let lastProgressLog = 0;
     do {
       if (!isPipelinePayloadActive(payload)) throw new Error('Job cancelled');
       info = await getTorrentInfoWithRetry(id, payload);
+      if (info.status !== lastLoggedStatus || Date.now() - lastProgressLog >= 30000) {
+        logger.info('dmm','Real-Debrid torrent progress',{jobId,status:info.status,progress:info.progress ?? null,secondsRemaining:Math.max(0,Math.ceil((deadline-Date.now())/1000))});
+        lastLoggedStatus = info.status;
+        lastProgressLog = Date.now();
+      }
       if (info.status === 'downloaded' && info.links?.length) break;
       if (['dead','error','virus','magnet_error'].includes(info.status)) throw new Error(`Real-Debrid status: ${info.status}`);
       await sleep(2000);
     } while (Date.now() < deadline);
-    if (info.status !== 'downloaded') throw new Error(`Real-Debrid timeout: ${info.status}`);
+    if (info.status !== 'downloaded') throw new Error(`Real-Debrid timeout after 8 minutes: ${info.status}`);
     const selected = info.files.filter(f => f.selected);
     const index = selected.findIndex(f => Number(f.id) === Number(fileId));
     if (index < 0 || !info.links[index]) throw new Error('No Real-Debrid link for matching audio file');
@@ -116,6 +123,7 @@ async function download(payload, helpers) {
   const c = payload.dmmCandidates?.[payload.dmmCandidateIndex || 0];
   if (!c) return helpers.failOrTryNextSource(payload, job, 'No DMM candidate');
   let file;
+  downloadTracker.updateDownloadMetadata(job.id, {downloadSource:'dmm', downloadClient:'realdebrid', remoteFilename:c.filename, releaseGuid:c.hash});
   try { file = await acquire({ ...c, jobId:job.id, payload }); }
   catch (err) { logger.warn('dmm','Real-Debrid acquisition failed',{jobId:job.id,error:err.message}); return helpers.failOrTryNextSource(payload, job, `DMM download failed: ${err.message}`); }
   if (!isPipelinePayloadActive(payload)) { await fs.rm(path.dirname(file), {recursive:true,force:true}); return null; }

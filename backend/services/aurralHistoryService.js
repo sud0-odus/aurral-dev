@@ -1074,7 +1074,8 @@ export const recordTrackJobBlocked = (job, message = "Blocked for review") =>
 
 export const toHistoryRequestItem = (entry, options = {}) => {
   const kind = entry.kind || null;
-  const source = resolveHistorySource(kind, entry.metadata);
+  const source = kind === 'track_download' && /^DMM \+ Real-Debrid:/i.test(String(entry.subtitle || ''))
+    ? 'dmm' : resolveHistorySource(kind, entry.metadata);
   const sourceFilename =
     String(options.sourceFilename || entry.metadata?.sourceFilename || "").trim() || null;
   const trackName =

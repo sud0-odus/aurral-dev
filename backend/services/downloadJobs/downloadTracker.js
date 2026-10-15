@@ -541,6 +541,7 @@ export class DownloadTracker {
     if (!job || job.status !== "pending" || !/^[a-f0-9]{40}$/i.test(dmmHash)) return false;
     const payload = { ...buildPipelinePayload(job), source: "dmm", phase: "search", allowedSources: ["dmm"], dmmHash };
     this.markSlskdDispatched(jobId);
+    this.updateDownloadMetadata(jobId, {downloadSource:'dmm', downloadClient:'realdebrid', releaseGuid:dmmHash});
     try {
       this.enqueuePipeline(payload);
       return true;
