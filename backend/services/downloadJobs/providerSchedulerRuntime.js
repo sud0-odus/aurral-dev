@@ -97,10 +97,14 @@ export function reservePipelineProvider(payload) {
       ...p, active: Math.max(0, p.active - (old?.provider_id === p.id ? 1 : 0)),
     }));
     const request = candidateJob(payload);
+    if (old?.provider_id && payload.providerId === old.provider_id) {
+      // A multi-phase provider attempt holds its slot until completion/fallback.
+      return payload;
+    }
     const desired = String(payload.providerId || "").trim();
     // Honor explicitly selected provider on a new attempt; if capacity is full,
     // let it wait rather than quietly changing a manual selection.
-    if (payload.manualSelection === true && desired) {
+    if (desired) {
       request.allowedSources = [desired];
     }
     const assignment = planProviderDispatch({ jobs: [request], providers: active }).assignments[0];
