@@ -45,6 +45,7 @@ async function getTorrentInfoWithRetry(id, payload) {
 
 async function acquire({ hash, fileId, jobId, payload }) {
   let id;
+  let preserveFailedTorrent = false; // RD_DIAGNOSTIC_PATCH_V1
   try {
     id = (await rd('/torrents/addMagnet', { method:'POST', data:{ magnet:`magnet:?xt=urn:btih:${hash}` }})).id;
     if (!id) throw new Error('Real-Debrid returned no torrent ID');
@@ -70,7 +71,21 @@ async function acquire({ hash, fileId, jobId, payload }) {
         lastProgressLog = Date.now();
       }
       if (info.status === 'downloaded' && info.links?.length) break;
-      if (['dead','error','virus','magnet_error'].includes(info.status)) throw new Error(`Real-Debrid status: ${info.status}`);
+      if (['dead','error','virus','magnet_error'].includes(info.status)) {
+        // Only log safe status fields: never URLs, magnets, filenames, links, or credentials.
+        const diagnostic = {
+          jobId,
+          status: info.status,
+          progress: typeof info.progress === 'number' ? info.progress : null,
+          errorCode: typeof info.error_code === 'number' || typeof info.error_code === 'string'
+            ? String(info.error_code).slice(0, 32) : null,
+          error: typeof info.error === 'string' ? info.error.slice(0, 160) : null,
+          torrentId: id,
+        };
+        logger.warn('dmm', 'Real-Debrid terminal torrent failure (retained for inspection)', diagnostic);
+        preserveFailedTorrent = true;
+        throw new Error(`Real-Debrid status: ${info.status}; torrent retained for inspection`);
+      }
       await sleep(2000);
     } while (Date.now() < deadline);
     if (info.status !== 'downloaded') throw new Error(`Real-Debrid timeout after 8 minutes: ${info.status}`);
@@ -90,7 +105,7 @@ async function acquire({ hash, fileId, jobId, payload }) {
     await pipeline(Readable.fromWeb(resp.body), createWriteStream(output));
     return output;
   } finally {
-    if (id) await rd(`/torrents/delete/${encodeURIComponent(id)}`, { method:'DELETE' }).catch(() => {});
+    if (id && !preserveFailedTorrent) await rd(`/torrents/delete/${encodeURIComponent(id)}`, { method:'DELETE' }).catch(() => {});
   }
 }
 function matchTrack(album, requested) {
