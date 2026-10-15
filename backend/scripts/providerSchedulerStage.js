@@ -31,7 +31,7 @@ try {
   ], { encoding: "utf8", timeout: 5000 }).trim());
   if (pid > 1) {
     const env = fs.readFileSync(`/proc/${pid}/environ`, "utf8");
-    const servicePath = env.split("\\0").find((entry) => entry.startsWith("PATH="))?.slice(5);
+    const servicePath = env.split("\0").find((entry) => entry.startsWith("PATH="))?.slice(5);
     if (servicePath) process.env.PATH = servicePath;
   }
 } catch (error) {
