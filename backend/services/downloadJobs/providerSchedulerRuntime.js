@@ -102,10 +102,13 @@ export function reservePipelineProvider(payload) {
       return payload;
     }
     const desired = String(payload.providerId || "").trim();
-    // Honor explicitly selected provider on a new attempt; if capacity is full,
-    // let it wait rather than quietly changing a manual selection.
+    // A continuation or a source fallback must stay with its selected source.
+    // Initial unassigned searches may overflow across providers by priority.
+    // Usenet is one source with two independently scheduled clients.
     if (desired) {
       request.allowedSources = [desired];
+    } else if (payload.source) {
+      request.allowedSources = [payload.source];
     }
     const assignment = planProviderDispatch({ jobs: [request], providers: active }).assignments[0];
     if (!assignment) {
