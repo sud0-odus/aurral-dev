@@ -1,4 +1,5 @@
 import { validateExternalUrl } from "../../../middleware/urlValidator.js";
+import { getProviderSchedulerStats } from "../../../services/downloadJobs/providerSchedulerRuntime.js";
 import {
   getDownloadClient,
   getDownloadClientSettings,
@@ -52,6 +53,9 @@ function registerClientTest(router, path, importClient, label, { warning } = {})
 }
 
 export function registerDownloadClients(router) {
+  router.get("/download-clients/scheduler", (_req, res) => {
+    res.json(getProviderSchedulerStats());
+  });
   router.get("/download-clients", (_req, res) => {
     res.json({ clients: getDownloadClientSettings() });
   });
