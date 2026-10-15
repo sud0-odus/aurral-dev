@@ -294,8 +294,14 @@ function dmmAlbumTrackMatches(job, track) {
   const filename = path.posix.basename(String(track.filename || track.path || '').replaceAll('\\', '/'));
   const title = norm(filename);
   if (title === wanted) return true;
+  // DMM filenames sometimes omit punctuation AND the separator itself:
+  // "Black Magic WomanGypsy Queen" vs "Black Magic Woman / Gypsy Queen".
+  // Compare full, compact titles only; never use substring/fuzzy matching.
+  const compact = value => value.replace(/\s+/g, '');
+  if (compact(title) === compact(wanted)) return true;
   const artist = norm(job.artistName);
-  return Boolean(artist && title === `${artist} ${wanted}`);
+  return Boolean(artist && (title === `${artist} ${wanted}` ||
+    compact(title) === compact(`${artist} ${wanted}`)));
 }
 
 // DMM_ALBUM_GRAB_V1: a single shared-queue operation for the whole release.
@@ -353,7 +359,7 @@ async function processDmmAlbumGrab(payload, helpers) {
     }
     if (!staged.length) return helpers.failOrTryNextSource(payload, leader, 'DMM album had no downloadable matching tracks');
     if (!isPipelinePayloadActive(payload)) return null;
-    const next = await finishAlbumGrab(payload, {filePaths:staged.map(f => f.path), source:'dmm', album:album.album});
+    const next = await finishAlbumGrab(payload, {filePaths:staged.map(f => f.path), source:'dmm', album:album.album, settleEdition:false});
     logger.info('dmm', 'DMM album grab processed', {jobId:leader.id, stagedTracks:staged.length, requestedTracks:jobs.length});
     return next;
   } finally {

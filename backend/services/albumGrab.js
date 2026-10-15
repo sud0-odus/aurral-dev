@@ -144,6 +144,7 @@ export async function finishAlbumGrab(payload, {
   source,
   album = null,
   resetFields = {},
+  settleEdition = true,
 } = {}) {
   const jobs = albumGrabJobs(payload);
   if (jobs.length === 0) return null;
@@ -186,7 +187,7 @@ export async function finishAlbumGrab(payload, {
       });
     }
   }
-  await settleAlbumEdition(payload, assigned.edition);
+  if (settleEdition) await settleAlbumEdition(payload, assigned.edition);
   if (assigned.accepted.length === 0 || (filePaths || []).length > assigned.unreadableCount) {
     blockAlbumGrabSource(payload, albumGrabJobs(payload));
   }
