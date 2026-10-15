@@ -68,7 +68,7 @@ export async function performHistoryTestAction(id, action, {removeImported=false
   if (!['cancel','reset-retry','force-clear'].includes(action)) throw Object.assign(new Error('Unknown action'),{statusCode:400});
   if (typeof removeImported !== 'boolean') throw Object.assign(new Error('removeImported must be boolean'),{statusCode:400});
   const chosen=selection(id);
-  return withPlaylistMutationLock('library', async () => {
+  const result = await withPlaylistMutationLock('library', async () => {
     const {jobs,albumId,requestId}=selection(id);
     if (requestId) {
       if (action !== 'force-clear') throw Object.assign(new Error('This request has no download jobs. Use Force Clear, then Download album from the album page.'),{statusCode:409});
@@ -125,11 +125,14 @@ export async function performHistoryTestAction(id, action, {removeImported=false
         const fresh=downloadTracker.addJob(track,'library',{playlistId:'library'});
         if (fresh) queued++;
       }
-      if(queued) {
-        const {downloadWorker}=await import('./downloadJobs/downloadWorker.js');
-        downloadWorker.wake(0);
-      }
     }
     return {success:true,action,jobsRemoved:jobs.length,importedFilesRemoved:files.length,queued};
   });
+  // A retired download owner is not running, so wake() is a no-op.
+  // Release the playlist mutation lock before starting or waking its worker.
+  if (action === 'reset-retry' && result.queued > 0) {
+    const { wakeDownloadWorker } = await import('./downloadJobs/mutationGuards.js');
+    await wakeDownloadWorker();
+  }
+  return result;
 }
