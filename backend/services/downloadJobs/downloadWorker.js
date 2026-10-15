@@ -22,6 +22,7 @@ import {
   resolveDownloadRoot,
 } from "../downloadPaths.js";
 import { startDownloadPipelineWorker } from "../downloadPipelineWorker.js";
+import { providerSchedulerEnabled, providerSchedulerMaxWorkers } from "./providerSchedulerRuntime.js";
 import { configuredLidarrFolders, isLidarrLibraryActive } from "../libraryFolders.js";
 import { listHonkerJobs, withHonkerLock } from "../honkerDb.js";
 import { isPlaylistOwnerActive } from "./playlistOwnerStatus.js";
