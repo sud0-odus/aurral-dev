@@ -3,6 +3,7 @@
 //        AURRAL_DATA_DIR=/opt/aurral_data node backend/scripts/providerSchedulerStage.js status
 import fs from "node:fs";
 import os from "node:os";
+import { execFileSync } from "node:child_process";
 
 const action = process.argv[2];
 if (!["configure", "status"].includes(action)) {
@@ -19,6 +20,22 @@ if (os.hostname() !== "aurral-scheduler-dev"
 }
 if (!fs.existsSync("/opt/aurral_data/aurral.db")) {
   throw new Error("CT119 database not found; refusing to create a replacement.");
+}
+
+// A Proxmox pct exec shell may have a different PATH from aurral.service.
+// Match the running service's PATH so yt-dlp capability checks reflect
+// the actual worker that downloaded the staging tracks.
+try {
+  const pid = Number(execFileSync("systemctl", [
+    "show", "aurral.service", "--property=MainPID", "--value",
+  ], { encoding: "utf8", timeout: 5000 }).trim());
+  if (pid > 1) {
+    const env = fs.readFileSync(`/proc/${pid}/environ`, "utf8");
+    const servicePath = env.split("\\0").find((entry) => entry.startsWith("PATH="))?.slice(5);
+    if (servicePath) process.env.PATH = servicePath;
+  }
+} catch (error) {
+  console.error("SERVICE_PATH_CHECK=UNAVAILABLE " + (error?.code || "unknown"));
 }
 
 const { db } = await import("../config/db-sqlite.js");
