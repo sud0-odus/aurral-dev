@@ -68,6 +68,59 @@ async function findExistingRealDebridLink({hash, fileId, jobId, payload}) {
   return null;
 }
 
+// DMM_CATALOG_FASTPATH_V1: use the existing file link supplied by DMM before creating a magnet.
+// Never print the link, token or unrestricted download URL in logs.
+async function tryCatalogLink({link, hash, fileId, expectedBytes, jobId, payload}) {
+  if (!link) return null;
+  const catalogUrl = new URL(link);
+  if (catalogUrl.protocol !== 'https:' || !['real-debrid.com', 'www.real-debrid.com'].includes(catalogUrl.hostname) ||
+      !/^\/d\/[A-Za-z0-9]+$/.test(catalogUrl.pathname)) throw new Error('Invalid DMM catalog file link');
+  let un;
+  try {
+    un = await rd('/unrestrict/link', {method:'POST',data:{link}});
+    if (!un.download) throw new Error('No direct Real-Debrid download URL');
+    logger.info('dmm','DMM catalog link unrestricted directly',{jobId});
+  } catch (directError) {
+    if (!isPipelinePayloadActive(payload)) throw new Error('Job cancelled');
+    logger.info('dmm','Direct catalog unrestrict unavailable; trying DMM music endpoint',{
+      jobId,reason:String(directError.message || '').slice(0,120)
+    });
+    const response = await fetch('https://debridmediamanager.com/api/music/unrestrict',{
+      method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({link,hash,fileId,accessToken:token()}),signal:AbortSignal.timeout(120000)
+    });
+    if (!response.ok) throw new Error(`DMM music unrestrict HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data.streamUrl) throw new Error('DMM music unrestrict returned no stream URL');
+    un = {download:data.streamUrl,filename:data.filename,filesize:data.filesize};
+    logger.info('dmm','DMM catalog link resolved by music endpoint',{jobId});
+  }
+  if (!isPipelinePayloadActive(payload)) throw new Error('Job cancelled');
+  const dl = new URL(un.download);
+  if (dl.protocol !== 'https:' || !(/(^|\.)download\.real-debrid\.com$/.test(dl.hostname)))
+    throw new Error('Unexpected Real-Debrid stream host');
+  if (Number(expectedBytes)>0 && Number(un.filesize)>0 && Number(un.filesize)!==Number(expectedBytes))
+    throw new Error('DMM catalog file size mismatch');
+  const dir=path.join(dmmStagingRoot(),String(jobId));
+  await fs.mkdir(dir,{recursive:true});
+  const output=path.join(dir,'track'+(path.extname(un.filename||'')||'.flac'));
+  try {
+    const resp=await fetch(un.download,{signal:AbortSignal.timeout(180000)});
+    if (!resp.ok || !resp.body) throw new Error(`Real-Debrid audio HTTP ${resp.status}`);
+    const {pipeline}=await import('node:stream/promises');
+    const {Readable}=await import('node:stream');
+    const {createWriteStream}=await import('node:fs');
+    await pipeline(Readable.fromWeb(resp.body),createWriteStream(output));
+    if (Number(expectedBytes)>0 && (await fs.stat(output)).size!==Number(expectedBytes))
+      throw new Error('Downloaded audio size did not match DMM catalog');
+    logger.info('dmm','DMM catalog audio staged',{jobId,bytes:(await fs.stat(output)).size});
+    return output;
+  } catch(error) {
+    await fs.rm(dir,{recursive:true,force:true});
+    throw error;
+  }
+}
+
 async function acquire({ hash, fileId, jobId, payload }) {
   let id;
   let preserveFailedTorrent = false; // RD_DIAGNOSTIC_PATCH_V1
@@ -172,7 +225,7 @@ async function search(payload, helpers) {
   for (const item of albums.slice(0,5)) {
     const album = await getDmmAlbum(item.hash);
     const track = matchTrack(album, { title: request.title || request.trackName || job.trackName });
-    if (track) matches.push({hash:album.hash, fileId:track.fileId, filename:track.filename, albumName:album.album});
+    if (track) matches.push({hash:album.hash, fileId:track.fileId, filename:track.filename, albumName:album.album, link:track.link || null, expectedBytes:track.bytes || null});
   }
   if (!matches.length) return helpers.failOrTryNextSource(payload, job, 'No exact DMM album/track match');
   logger.info('dmm','Matched music catalog candidate',{jobId:job.id,candidateCount:matches.length});
@@ -185,7 +238,19 @@ async function download(payload, helpers) {
   if (!c) return helpers.failOrTryNextSource(payload, job, 'No DMM candidate');
   let file;
   downloadTracker.updateDownloadMetadata(job.id, {downloadSource:'dmm', downloadClient:'realdebrid', remoteFilename:c.filename, releaseGuid:c.hash});
-  try { file = await acquire({ ...c, jobId:job.id, payload }); }
+  try {
+    if (c.link) {
+      try {
+        file = await tryCatalogLink({...c,jobId:job.id,payload});
+      } catch(error) {
+        if (String(error.message).includes('Job cancelled')) throw error;
+        logger.warn('dmm','DMM catalog fast path unavailable; falling back to Real-Debrid torrent workflow',{
+          jobId:job.id,reason:String(error.message || '').slice(0,150)
+        });
+      }
+    }
+    if (!file) file = await acquire({...c,jobId:job.id,payload});
+  }
   catch (err) { logger.warn('dmm','Real-Debrid acquisition failed',{jobId:job.id,error:err.message}); return helpers.failOrTryNextSource(payload, job, `DMM download failed: ${err.message}`); }
   if (!isPipelinePayloadActive(payload)) { await fs.rm(path.dirname(file), {recursive:true,force:true}); return null; }
   logger.info('dmm','Acquired audio; entering validation',{jobId:job.id,filename:c.filename});
