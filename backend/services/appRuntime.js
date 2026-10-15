@@ -357,6 +357,16 @@ export function startBackgroundWorkers({ logger = console } = {}) {
     else checkQueuedBackgroundWork();
   });
   backgroundProcessSupervisor.start();
+  // A pending track is stored outside Honker until a download owner dispatches it.
+  // After a restart, no Honker message may exist to demand-launch that owner.
+  void import("./downloadJobs/downloadTracker.js")
+    .then(({ downloadTracker }) => {
+      if (!downloadTracker.getNextPending()) return null;
+      return backgroundProcessSupervisor.request("downloads", "wakeOrStart");
+    })
+    .catch((error) => {
+      logger.warn?.("[AppRuntime] Could not resume pending downloads:", error?.message || error);
+    });
   void import("./libraryFileWatcher.js")
     .then((module) => {
       stopLibraryFileWatcher = module.stopLibraryFileWatcher;
