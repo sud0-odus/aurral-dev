@@ -9,6 +9,7 @@ import { resolveDownloadRoot } from './downloadPaths.js';
 import { validateDownloadedTrackFile } from './trackMatching/index.js';
 import { finalizePipelineJobSuccess } from './pipelineHelpers.js';
 import { isPipelinePayloadActive, withPipelineCommitLock } from './downloadJobs/downloadCancellation.js';
+import { albumGrabJobs, finishAlbumGrab } from './albumGrab.js';
 
 const RD = 'https://api.real-debrid.com/rest/1.0';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -284,10 +285,87 @@ async function finalize(payload, helpers) {
   }
   return committed.result;
 }
+// DMM_ALBUM_MATCH_V2: compare track titles, not catalog file paths or artist prefixes.
+// Matching is only a candidate prefilter: finishAlbumGrab still verifies each audio
+// file strictly against Aurral's requested release before importing anything.
+function dmmAlbumTrackMatches(job, track) {
+  const wanted = norm(job.trackName);
+  if (!wanted) return false;
+  const filename = path.posix.basename(String(track.filename || track.path || '').replaceAll('\\', '/'));
+  const title = norm(filename);
+  if (title === wanted) return true;
+  const artist = norm(job.artistName);
+  return Boolean(artist && title === `${artist} ${wanted}`);
+}
+
+// DMM_ALBUM_GRAB_V1: a single shared-queue operation for the whole release.
+// Never mark missing/invalid tracks done: finishAlbumGrab enforces strict validation.
+async function processDmmAlbumGrab(payload, helpers) {
+  const leader = downloadTracker.getJob(payload.jobId);
+  if (!leader) return null;
+  if (payload.phase === 'search') {
+    const jobs = albumGrabJobs(payload);
+    if (jobs.length < 2) return helpers.failOrTryNextSource(payload, leader, 'Album grab no longer has pending members');
+    const results = (await searchDmmAlbums(`${leader.artistName} ${leader.albumName}`, 48)).albums || [];
+    const editions = results.filter(item => norm(item.artist) === norm(leader.artistName) && norm(item.album) === norm(leader.albumName));
+    let best = null;
+    for (const item of editions.slice(0, 6)) {
+      const album = await getDmmAlbum(item.hash);
+      const tracks = (album.tracks || []).filter(t => /\.(flac|mp3|m4a|aac|ogg|opus|wav|wma)$/i.test(t.filename || ''));
+      const matching = jobs.filter(j => tracks.some(t => dmmAlbumTrackMatches(j, t))).length;
+      if (!best || matching > best.matching) best = {album, tracks, matching};
+    }
+    if (!best || best.matching < 2) {
+      logger.info('dmm', 'DMM album candidate match summary', {
+        jobId:leader.id, catalogEditions:editions.length,
+        bestMatchedTracks:best?.matching || 0, requestedTracks:jobs.length,
+      });
+      return helpers.failOrTryNextSource(payload, leader, 'No DMM album edition matching multiple requested tracks');
+    }
+    logger.info('dmm', 'DMM album release matched', {jobId: leader.id, trackCount: best.tracks.length, requestedTracks: jobs.length, matchingTracks: best.matching});
+    return {...payload, source:'dmm', phase:'download', dmmAlbumHash:best.album.hash};
+  }
+  if (payload.phase !== 'download') throw new Error('Unexpected DMM album phase');
+  const album = await getDmmAlbum(payload.dmmAlbumHash);
+  const jobs = albumGrabJobs(payload);
+  if (!jobs.length) return null;
+  const staged = [];
+  const folders = new Set();
+  const albumTracks = (album.tracks || []).filter(t => /\.(flac|mp3|m4a|aac|ogg|opus|wav|wma)$/i.test(t.filename || ''));
+  try {
+    for (const track of albumTracks) {
+      if (!isPipelinePayloadActive(payload)) throw new Error('Job cancelled');
+      const job = jobs.find(j => dmmAlbumTrackMatches(j, track) && !staged.some(f => f.jobId === j.id));
+      if (!job || !track.link) continue;
+      try {
+        const file = await tryCatalogLink({link:track.link, hash:album.hash, fileId:track.fileId, expectedBytes:track.bytes, jobId:job.id, payload});
+        const safeName = path.basename(String(track.filename));
+        if (!safeName || !/\.(flac|mp3|m4a|aac|ogg|opus|wav|wma)$/i.test(safeName)) throw new Error('Invalid DMM filename');
+        const named = path.join(path.dirname(file), safeName);
+        await fs.rename(file, named);
+        folders.add(path.dirname(named));
+        staged.push({jobId:job.id, path:named});
+        logger.info('dmm', 'DMM album track staged', {jobId:job.id, stagedCount:staged.length, totalRequested:jobs.length});
+      } catch (error) {
+        if (String(error.message).includes('Job cancelled')) throw error;
+        logger.warn('dmm', 'DMM album track unavailable', {jobId:job.id, reason:String(error.message).slice(0,130)});
+      }
+    }
+    if (!staged.length) return helpers.failOrTryNextSource(payload, leader, 'DMM album had no downloadable matching tracks');
+    if (!isPipelinePayloadActive(payload)) return null;
+    const next = await finishAlbumGrab(payload, {filePaths:staged.map(f => f.path), source:'dmm', album:album.album});
+    logger.info('dmm', 'DMM album grab processed', {jobId:leader.id, stagedTracks:staged.length, requestedTracks:jobs.length});
+    return next;
+  } finally {
+    for (const folder of folders) await fs.rm(folder, {recursive:true, force:true}).catch(()=>{});
+  }
+}
+
 export async function processDmmPipelinePayload(payload,helpers={}) {
   if (!token()) return helpers.failOrTryNextSource(payload,downloadTracker.getJob(payload.jobId),'DMM Real-Debrid token missing');
   if (!isPipelinePayloadActive(payload)) return null;
   try {
+    if (payload.albumGrab === true) return await processDmmAlbumGrab(payload,helpers);
     if (payload.phase === 'search') return await search(payload,helpers);
     if (payload.phase === 'download') return await download(payload,helpers);
     if (payload.phase === 'finalize') return await finalize(payload,helpers);

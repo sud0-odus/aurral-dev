@@ -79,7 +79,7 @@ function getRows(item) {
   ].filter(([, value]) => text(value));
 }
 
-export default function ActivityInfoModal({ item, onClose }) {
+export default function ActivityInfoModal({ item, onClose, onTestAction, testActionBusy = false, testActionError = null }) {
   const titleId = useId();
   const { dialogRef, handleBackdropClick } = useModalDialog({
     open: Boolean(item),
@@ -123,6 +123,14 @@ export default function ActivityInfoModal({ item, onClose }) {
             </div>
           ))}
         </dl>
+        {(item.kind === 'track_download' || item.kind === 'album_download' || item.kind === 'album_requested') && onTestAction ? (
+          <div className="activity-info-modal__test-actions" style={{display:'flex',gap:8,flexWrap:'wrap',padding:'12px 0'}}>
+            <button type="button" className="btn btn-secondary" disabled={testActionBusy || item.kind === 'album_requested'} onClick={()=>onTestAction(item,'cancel')}>Cancel</button>
+            <button type="button" className="btn btn-primary" disabled={testActionBusy || item.kind === 'album_requested'} onClick={()=>onTestAction(item,'reset-retry')}>Reset &amp; Retry</button>
+            <button type="button" className="btn btn-secondary" disabled={testActionBusy} onClick={()=>onTestAction(item,'force-clear')}>Force Clear</button>
+            {testActionError ? <p role="alert" style={{width:'100%'}}>{testActionError}</p> : null}
+          </div>
+        ) : null}
       </section>
     </div>
   );

@@ -7,6 +7,9 @@ import {
 } from "../core.js";
 import { queryClient, queryKeys } from "../../../queryClient.js";
 
+export const performHistoryTestAction = (id, action, options = {}) =>
+  postData(`/playlists/history-test/${encodeURIComponent(id)}/${encodeURIComponent(action)}`,options);
+
 export const getPlaylistTrackStreamUrl = (jobId) =>
   buildAuthenticatedApiUrl(`/playlists/stream/${encodeURIComponent(jobId)}`);
 

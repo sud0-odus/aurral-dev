@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { getRequests, triggerAlbumSearch } from "../utils/api/endpoints/library.js";
-import { approveBlockedJob, denyBlockedJob, getStagingStreamUrl } from "../utils/api/endpoints/playlists";
+import { approveBlockedJob, denyBlockedJob, getStagingStreamUrl, performHistoryTestAction } from "../utils/api/endpoints/playlists";
 import { useAudioQueue } from "../contexts/audioQueueContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useAuth } from "../contexts/AuthContext";
@@ -60,6 +60,26 @@ function ActivityPage() {
   const [filterValue, setFilterValue] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [infoRequest, setInfoRequest] = useState(null);
+  const [testActionBusy, setTestActionBusy] = useState(false);
+  const [testActionError, setTestActionError] = useState(null);
+  const handleTestAction = async (item, action) => {
+    const id=(item.kind === 'album_download' || item.kind === 'album_requested') ? item.id : item.jobId;
+    if (!id) { setTestActionError('No History ID for this entry'); return; }
+    const removeImported = action !== 'cancel' && item.kind !== 'album_requested' && window.confirm(
+      'Remove files imported by this attempt? Cancel means keep files. OK = remove imported files; Cancel = preserve files.'
+    );
+    if (!window.confirm(`${action === 'reset-retry' ? 'Reset and retry' : action === 'force-clear' ? 'Force clear' : 'Cancel'} ${item.albumName || item.trackName}?`)) return;
+    setTestActionBusy(true);
+    setTestActionError(null);
+    try {
+      await performHistoryTestAction(id,action,{removeImported});
+      await queryClient.invalidateQueries({queryKey:activityQueryKey});
+      await queryClient.invalidateQueries({queryKey:queryKeys.playlistJobs()});
+      setInfoRequest(null);
+    } catch(error) {
+      setTestActionError(error?.response?.data?.error || error?.message || 'Action failed');
+    } finally { setTestActionBusy(false); }
+  };
 
   const { playTrack, currentTrack, isPlaying, togglePlayPause } = useAudioQueue();
 
@@ -461,7 +481,7 @@ function ActivityPage() {
           )}
         </div>
       )}
-      <ActivityInfoModal item={infoRequest} onClose={() => setInfoRequest(null)} />
+      <ActivityInfoModal item={infoRequest} onClose={() => setInfoRequest(null)} onTestAction={user?.role === "admin" ? handleTestAction : undefined} testActionBusy={testActionBusy} testActionError={testActionError} />
     </div>
   );
 }

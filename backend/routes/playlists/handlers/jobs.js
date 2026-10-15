@@ -495,6 +495,21 @@ export function registerJobs(router) {
 }
 
 export function registerJobCancellation(router) {
+  // AURRAL_HISTORY_CONTROLS_V1: admin-only targeted track/album actions.
+  router.post('/history-test/:id/:action', requireAdmin, async (req,res) => {
+    try {
+      const id=req.params.id;
+      const action=req.params.action;
+      const options={removeImported:req.body?.removeImported === true};
+      const result=isDownloadOwnerProcess()
+        ? await (await import('../../../services/historyTestActions.js')).performHistoryTestAction(id,action,options)
+        : await requestDownloadOwner('performHistoryTestAction',[id,action,options],{timeoutMs:120000});
+      invalidateRequestsCache();
+      return res.json(result);
+    } catch(error) {
+      return res.status(error.statusCode||500).json({error:error.message||'History action failed'});
+    }
+  });
   router.post("/jobs/:jobId/cancel", async (req, res) => {
     const job = downloadTracker.getJob(req.params.jobId);
     if (!job) return res.status(404).json({ error: "Track not found" });

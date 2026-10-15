@@ -44,7 +44,7 @@ export function jobMatchesTrack(job, track) {
 function selectStatus(counts, { sourceConfigured, sourceMessage, failedError }) {
   const unavailable = counts.total - counts.available;
   if (counts.total > 0 && unavailable === 0) return { status: "complete" };
-  if (counts.downloading + counts.cancel_requested + counts.done > 0) {
+  if (counts.downloading + counts.cancel_requested > 0) {
     return { status: "downloading" };
   }
   if (counts.pending > 0) return { status: "queued" };

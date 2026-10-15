@@ -112,7 +112,7 @@ export function getEnabledDownloadSources() {
   });
 }
 
-export const ALBUM_GRAB_SOURCE_IDS = ["slskd", "usenet", "deemix"];
+export const ALBUM_GRAB_SOURCE_IDS = ["slskd", "usenet", "deemix", "dmm"];
 
 export function isAlbumGrabSourceConfigured() {
   return getEnabledDownloadSources().some((source) => ALBUM_GRAB_SOURCE_IDS.includes(source.id));

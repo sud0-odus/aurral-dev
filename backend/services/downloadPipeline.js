@@ -109,6 +109,11 @@ export function buildNextSourcePayload(payload, failedSource = null, reason = nu
       && (payload?.albumGrab !== true || ALBUM_GRAB_SOURCE_IDS.includes(source.id)),
   );
   if (sources.length === 0) return null;
+  // Prefer one DMM album release over piecemeal providers for album grabs.
+  if (payload?.albumGrab === true) {
+    const dmmIndex = sources.findIndex((source) => source.id === 'dmm');
+    if (dmmIndex > 0) sources.unshift(...sources.splice(dmmIndex, 1));
+  }
   const tried = new Set(Array.isArray(payload?.triedSources) ? payload.triedSources : []);
   const sourceErrors = Array.isArray(payload?.sourceErrors) ? [...payload.sourceErrors] : [];
   if (failedSource) {
