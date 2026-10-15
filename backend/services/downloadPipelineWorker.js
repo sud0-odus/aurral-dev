@@ -14,6 +14,7 @@ import { logger, safeLogDiagnostic } from "./logger.js";
 import { recordAlbumGrabQueued, recordAlbumGrabPhase } from "./albumGrabActivity.js";
 import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { withDownloadPayloadMutation } from "./downloadJobs/mutationGuards.js";
+import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservations, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
 
 async function processLockedPipelineJob(payload, dependencies = {}) {
   const processPayload = dependencies.processPipelinePayload || processPipelinePayload;
@@ -25,6 +26,7 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
       recordAlbumGrabPhase(payload);
     }
     const nextPayload = await processPayload(payload);
+    if (providerSchedulerEnabled() && nextPayload == null) releasePipelineProvider(payload);
     if (nextPayload?.albumGrab === true) recordAlbumGrabPhase(nextPayload);
     if (payload?.albumGrab === true
       && !(nextPayload?.albumGrab === true && isPipelinePayloadActive(nextPayload))) {
@@ -44,7 +46,17 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
 }
 
 export function processPipelineJob(payload, dependencies = {}) {
-  return withDownloadPayloadMutation(payload, (current) => processLockedPipelineJob(current, dependencies));
+  return withDownloadPayloadMutation(payload, async (current) => {
+    if (providerSchedulerEnabled() && !current?.manualSelection) {
+      const reserved = reservePipelineProvider(current);
+      if (!reserved) {
+        await (dependencies.continuePipeline || continuePipeline)({ ...current, delaySeconds: 2 });
+        return;
+      }
+      return processLockedPipelineJob(reserved, dependencies);
+    }
+    return processLockedPipelineJob(current, dependencies);
+  });
 }
 
 // AURRAL_DUAL_PIPELINE_CONSUMER_V1
@@ -87,6 +99,7 @@ const {
   onStart() {
     if (!isAnyDownloadSourceConfigured()) return false;
     console.log("[pipeline] worker starting");
+    if (providerSchedulerEnabled()) reconcilePipelineReservations();
     enqueuePendingJobsWithoutBatch();
     if (process.env.AURRAL_PIPELINE_CONSUMERS === "2") secondaryPipelineConsumer.start();
     return true;
