@@ -1,12 +1,14 @@
 import { dbOps } from "../db/helpers/index.js";
 import { prowlarrClient } from "./prowlarrClient.js";
 import { getDownloadClient } from "./download/downloadClientSettings.js";
+import { dmmConfigured, dmmEnabled, dmmPriority } from "./dmmSettings.js";
 
 const SOURCE_LABELS = {
   slskd: "Soulseek",
   usenet: "Usenet",
   deemix: "deemix",
   ytdlp: "yt-dlp",
+  dmm: "DMM + Real-Debrid",
 };
 
 function normalizePriority(value, fallback) {
@@ -61,6 +63,7 @@ export function getDownloadSourceStatus() {
   const ytdlpConfigured = ytdlpClient.isConfigured();
   const deemixConfigured = deemixClient.isConfigured();
   return {
+    dmm: { id: "dmm", label: SOURCE_LABELS.dmm, enabled: dmmEnabled(), configured: dmmConfigured(), priority: dmmPriority() },
     slskd: {
       id: "slskd",
       label: SOURCE_LABELS.slskd,
@@ -102,6 +105,7 @@ export function getEnabledDownloadSources() {
   if (status.usenet.configured) sources.push(status.usenet);
   if (status.deemix.configured) sources.push(status.deemix);
   if (status.ytdlp.configured) sources.push(status.ytdlp);
+  if (status.dmm.configured) sources.push(status.dmm);
   return sources.sort((left, right) => {
     if (left.priority !== right.priority) return left.priority - right.priority;
     return left.id.localeCompare(right.id);

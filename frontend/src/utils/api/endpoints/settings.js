@@ -1,4 +1,4 @@
-import { getData, postData, lidarrCredentialParams } from "../core.js";
+import { getData, postData, putData, lidarrCredentialParams } from "../core.js";
 import { queryClient, queryKeys } from "../../../queryClient.js";
 
 export const startPlexAuth = (forwardUrl) =>
@@ -60,6 +60,10 @@ export const getDownloadClientSettings = () =>
     queryFn: ({ signal }) => fetchDownloadClientSettings({ signal }),
     staleTime: 30_000,
   });
+
+export const getDownloadWorkerSettings = () => getData("/playlists/worker/settings");
+export const updateDownloadWorkerSettings = (concurrency) =>
+  putData("/playlists/worker/settings", { concurrency });
 
 export const testDownloadClientConnection = (key, config) =>
   postData(`/settings/download-clients/${encodeURIComponent(key)}/test`, config);

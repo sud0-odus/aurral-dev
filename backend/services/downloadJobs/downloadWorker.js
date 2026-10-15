@@ -41,7 +41,7 @@ import {
 const DEFAULT_CONCURRENCY = 3;
 const SEARCH_SLOT_RECHECK_MS = 2000;
 const MIN_CONCURRENCY = 1;
-const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 10;
 const JOB_COOLDOWN_MS = 750;
 const REUSE_REPAIR_INTERVAL_MS = 30 * 60 * 1000;
 const WORKER_STOPPED_CODE = "WORKER_STOPPED";
@@ -466,6 +466,7 @@ export class DownloadWorker {
         }
 
         this.activeCount++;
+        console.log(`[DownloadWorker] Allocated slot ${this.activeCount}/${concurrency} for ${job.id}`);
         this.currentJob = {
           id: job.id,
           playlistType: job.playlistType,
@@ -625,6 +626,7 @@ export class DownloadWorker {
         return;
       }
       this._assertJobCanContinue(job, runGeneration);
+      console.log(`[DownloadWorker] Enqueueing provider pipeline for ${job.id}`);
       if (!downloadTracker.enqueueDownloadPipeline(job.id)) {
         throw new Error("Failed to enqueue the download pipeline");
       }

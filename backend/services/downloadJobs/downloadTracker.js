@@ -535,6 +535,21 @@ export class DownloadTracker {
     return true;
   }
 
+  // One DMM-only manual CLI test; uses the normal Honker queue, not a new worker.
+  enqueueDmmOnly(jobId, dmmHash) {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status !== "pending" || !/^[a-f0-9]{40}$/i.test(dmmHash)) return false;
+    const payload = { ...buildPipelinePayload(job), source: "dmm", phase: "search", allowedSources: ["dmm"], dmmHash };
+    this.markSlskdDispatched(jobId);
+    try {
+      this.enqueuePipeline(payload);
+      return true;
+    } catch (error) {
+      this.setFailed(jobId, `DMM CLI enqueue failed: ${error.message}`);
+      return false;
+    }
+  }
+
   enqueueSlskdPipeline(jobId) {
     return this.enqueueDownloadPipeline(jobId);
   }

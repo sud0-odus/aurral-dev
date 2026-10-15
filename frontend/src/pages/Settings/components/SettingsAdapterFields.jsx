@@ -89,6 +89,25 @@ export function SettingsAdapterFields({ definition, settings, onChange }) {
       );
     }
 
+    if (definition?.key === "dmm" && field.secret) {
+      const hasStoredCredential = Boolean(String(value || "").trim());
+      return (
+        <SettingsModalField key={field.key} label={field.label} htmlFor={id} hint={field.hint}>
+          <SettingsInput
+            id={id}
+            type="password"
+            autoComplete="new-password"
+            value={value}
+            placeholder={hasStoredCredential ? "••••••••" : "Use server token or enter a token"}
+            onChange={(event) => updateValue(event.target.value)}
+          />
+          <span className="dmm-credential-stored-indicator" role="status">
+            {hasStoredCredential ? "Credential stored" : "No GUI credential saved; server token may be available"}
+          </span>
+        </SettingsModalField>
+      );
+    }
+
     return (
       <SettingsModalField key={field.key} label={field.label} htmlFor={id} hint={field.hint}>
         <SettingsInput

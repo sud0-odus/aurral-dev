@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { testDownloadClientConnection } from "../../../utils/api/endpoints/settings.js";
+import {
+  getDownloadWorkerSettings,
+  updateDownloadWorkerSettings,
+  testDownloadClientConnection,
+} from "../../../utils/api/endpoints/settings.js";
 
 import { Plus, RefreshCw, Trash2, Wrench } from "lucide-react";
 import { DotLoader } from "../../../components/DotLoader";
@@ -72,6 +76,10 @@ export function SettingsDownloadClientsSection({
   showError,
   showInfo,
 }) {
+  const [workerConcurrency, setWorkerConcurrency] = useState(null);
+  const [workerDraft, setWorkerDraft] = useState(3);
+  const [workerSaving, setWorkerSaving] = useState(false);
+  const [workerError, setWorkerError] = useState("");
   const [activeModal, setActiveModal] = useState(null);
   const [testingClient, setTestingClient] = useState(null);
   const [testStatus, setTestStatus] = useState(null);
@@ -80,6 +88,44 @@ export function SettingsDownloadClientsSection({
   useEffect(() => {
     setTestStatus(null);
   }, [activeModal]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getDownloadWorkerSettings()
+      .then((result) => {
+        if (cancelled) return;
+        const value = Number(result?.concurrency);
+        if (Number.isInteger(value) && value >= 1 && value <= 10) {
+          setWorkerConcurrency(value);
+          setWorkerDraft(value);
+        } else {
+          setWorkerError("Worker setting is unavailable.");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setWorkerError("Worker settings require an administrator account.");
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const saveWorkerConcurrency = async () => {
+    if (!Number.isInteger(workerDraft) || workerDraft < 1 || workerDraft > 10) return;
+    setWorkerSaving(true);
+    setWorkerError("");
+    try {
+      const result = await updateDownloadWorkerSettings(workerDraft);
+      const saved = Number(result?.settings?.concurrency);
+      if (saved !== workerDraft) throw new Error("Worker rejected the requested concurrency.");
+      setWorkerConcurrency(saved);
+      showSuccess(`Aurral download concurrency set to ${saved}.`);
+    } catch (error) {
+      const message = error.response?.data?.message || error.response?.data?.error || error.message || "Could not update concurrency.";
+      setWorkerError(message);
+      showError(message);
+    } finally {
+      setWorkerSaving(false);
+    }
+  };
 
   const integrations = settings.integrations || {};
   const pathMappings = coercePathMappings(settings.pathMappings).filter(
@@ -261,6 +307,37 @@ export function SettingsDownloadClientsSection({
           ) : null}
         </div>
       </div>
+
+      <SettingsArrFieldSet legend="Download concurrency">
+        <SettingsArrFormGroup
+          label="Simultaneous Aurral jobs"
+          labelFor="download-clients-concurrency"
+          help="Controls how many tracks Aurral searches/processes concurrently across providers; not the transfer limits inside SABnzbd or slskd. Normal: 2-3. Higher: 4-10 for bulk imports (watch provider load and worker restarts)."
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+            <SettingsInput
+              id="download-clients-concurrency"
+              type="number"
+              min={1}
+              max={10}
+              step={1}
+              disabled={workerConcurrency == null || workerSaving}
+              value={workerDraft}
+              onChange={(event) => setWorkerDraft(Number(event.target.value))}
+            />
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={workerConcurrency == null || workerSaving || workerDraft === workerConcurrency || !Number.isInteger(workerDraft) || workerDraft < 1 || workerDraft > 10}
+              onClick={saveWorkerConcurrency}
+            >
+              {workerSaving ? "Applying..." : "Apply"}
+            </button>
+            {workerConcurrency != null ? <span>Current: {workerConcurrency}</span> : null}
+          </div>
+          {workerError ? <p role="alert">{workerError}</p> : null}
+        </SettingsArrFormGroup>
+      </SettingsArrFieldSet>
 
       <SettingsArrFieldSet legend="Quality profile">
         <div className="arr-info">

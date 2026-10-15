@@ -6,6 +6,7 @@ const PATH_MAPPING_SOURCES = new Set([
   "all",
   "lidarr",
   "slskd",
+  "dmm",
   "nzbget",
   "sabnzbd",
   "deemix",

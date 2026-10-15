@@ -44,6 +44,7 @@ const SENSITIVE_PATHS = [
   ["general", "authPassword"],
   ["lidarr", "apiKey"],
   ["slskd", "apiKey"],
+  ["dmm", "apiToken"],
   ["prowlarr", "apiKey"],
   ["nzbget", "password"],
   ["gotify", "token"],

@@ -174,6 +174,12 @@ export const normalizeSettings = (savedSettings) => {
         stagingPath: "",
         ...(savedSettings.integrations?.ytdlp || {}),
       },
+      dmm: {
+        enabled: false,
+        priority: 30,
+        stagingPath: "",
+        ...(savedSettings.integrations?.dmm || {}),
+      },
       deemix: {
         enabled: false,
         url: "",

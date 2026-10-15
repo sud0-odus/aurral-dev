@@ -13,6 +13,7 @@ import { logger } from "./logger.js";
 
 export default function createHonkerWorker({
   name,
+  registrationName = name, // AURRAL_DUAL_PIPELINE_CONSUMER_V1
   getQueue,
   processJob,
   prepareJob,
@@ -194,7 +195,7 @@ export default function createHonkerWorker({
       const intentional = stopRequested || idleStopped;
       stopRequested = false;
       const restartAllowed = typeof shouldRestart === "function" ? shouldRestart() : true;
-      markHonkerWorkerLoopEnded(name, restartAllowed ? start : null, {
+      markHonkerWorkerLoopEnded(registrationName, restartAllowed ? start : null, {
         intentional,
         ...(typeof shouldRestart === "function" ? { shouldRestart } : {}),
       });
@@ -221,6 +222,6 @@ export default function createHonkerWorker({
     return running;
   }
 
-  registerHonkerWorker(name, { start, stop, isRunning });
+  registerHonkerWorker(registrationName, { start, stop, isRunning });
   return { start, stop, isRunning };
 }

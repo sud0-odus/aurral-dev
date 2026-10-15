@@ -361,9 +361,9 @@ export function registerJobs(router) {
     const { concurrency, existingFileMode } = req.body || {};
     if (concurrency !== undefined) {
       const parsed = Number(concurrency);
-      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 3) {
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10) {
         return res.status(400).json({
-          error: "concurrency must be an integer between 1 and 3",
+          error: "concurrency must be an integer between 1 and 10",
         });
       }
     }

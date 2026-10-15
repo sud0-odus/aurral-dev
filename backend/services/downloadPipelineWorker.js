@@ -47,10 +47,37 @@ export function processPipelineJob(payload, dependencies = {}) {
   return withDownloadPayloadMutation(payload, (current) => processLockedPipelineJob(current, dependencies));
 }
 
+// AURRAL_DUAL_PIPELINE_CONSUMER_V1
+// Both consumers claim from the SAME persisted queue. No queue migration.
+// Default stays at one consumer unless AURRAL_PIPELINE_CONSUMERS=2.
+const secondaryPipelineConsumer = createHonkerWorker({
+  name: "slskd-pipeline",
+  registrationName: "slskd-pipeline-secondary",
+  getQueue: getPipelineQueue,
+  idlePollS: 2,
+  retryDelayS: 30,
+  shouldRestart: () => isAnyDownloadSourceConfigured(),
+  onStart() {
+    if (process.env.AURRAL_PIPELINE_CONSUMERS !== "2" || !isAnyDownloadSourceConfigured()) return false;
+    console.log("[pipeline] secondary consumer starting");
+    return true;
+  },
+  processJob: processPipelineJob,
+  onFinalFailure(job, error) {
+    const message = error?.message || String(error);
+    console.error("[downloadPipelineWorker] secondary pipeline job failed:", {
+      jobId: job.payload?.jobId || null,
+      phase: job.payload?.phase || null,
+      message,
+    });
+    return withDownloadPayloadMutation(job.payload, (payload) => failPipelineJob(payload, message));
+  },
+});
+
 const {
-  start: startDownloadPipelineWorker,
-  stop: stopDownloadPipelineWorker,
-  isRunning: isDownloadPipelineWorkerRunning,
+  start: startPrimaryPipelineWorker,
+  stop: stopPrimaryPipelineWorker,
+  isRunning: isPrimaryPipelineWorkerRunning,
 } = createHonkerWorker({
   name: "slskd-pipeline",
   getQueue: getPipelineQueue,
@@ -61,6 +88,7 @@ const {
     if (!isAnyDownloadSourceConfigured()) return false;
     console.log("[pipeline] worker starting");
     enqueuePendingJobsWithoutBatch();
+    if (process.env.AURRAL_PIPELINE_CONSUMERS === "2") secondaryPipelineConsumer.start();
     return true;
   },
   processJob: processPipelineJob,
@@ -77,8 +105,13 @@ const {
   },
 });
 
-export {
-  startDownloadPipelineWorker,
-  stopDownloadPipelineWorker,
-  isDownloadPipelineWorkerRunning,
-};
+export function startDownloadPipelineWorker() {
+  if (process.env.AURRAL_PIPELINE_CONSUMERS === "2") secondaryPipelineConsumer.start();
+  return startPrimaryPipelineWorker();
+}
+export async function stopDownloadPipelineWorker() {
+  await Promise.all([stopPrimaryPipelineWorker(), secondaryPipelineConsumer.stop()]);
+}
+export function isDownloadPipelineWorkerRunning() {
+  return isPrimaryPipelineWorkerRunning();
+}

@@ -6,6 +6,7 @@ import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { processSlskdPipelinePayload, SLSKD_NOT_CONFIGURED_MESSAGE } from "./slskdOrchestrator.js";
 import { processUsenetPipelinePayload } from "./usenetOrchestrator.js";
 import { processYtdlpPipelinePayload } from "./ytdlpOrchestrator.js";
+import { processDmmPipelinePayload } from "./dmmOrchestrator.js";
 import { processDeemixPipelinePayload } from "./deemixOrchestrator.js";
 import { fallbackAlbumGrabToTracks, releaseAlbumGrabJobs } from "./albumGrab.js";
 import {
@@ -238,6 +239,13 @@ async function processSourcePayload(payload) {
       return job ? failOrTryNextSource(payload, job, "deemix is not configured") : null;
     }
     return processDeemixPipelinePayload(payload, { failOrTryNextSource });
+  }
+  if (payload.source === "dmm") {
+    if (!isSourceConfigured("dmm")) {
+      const job = downloadTracker.getJob(payload.jobId);
+      return job ? failOrTryNextSource(payload, job, "DMM not configured") : null;
+    }
+    return processDmmPipelinePayload(payload, { failOrTryNextSource });
   }
   if (payload.source === "ytdlp") {
     if (!isSourceConfigured("ytdlp")) {
