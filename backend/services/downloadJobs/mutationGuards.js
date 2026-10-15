@@ -5,6 +5,7 @@ import { isDownloadOwnerProcess, requestDownloadOwner } from "./downloadOwnerCli
 import { logger } from "../logger.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveTransferredDownloadPayload } from "./downloadOwnership.js";
+import { providerSchedulerEnabled } from "./providerSchedulerRuntime.js";
 
 const downloadLeases = new AsyncLocalStorage();
 
@@ -147,6 +148,15 @@ function payloadOwners(payload) {
 }
 
 export async function withDownloadPayloadMutation(payload, operation) {
+  if (providerSchedulerEnabled() && payload?.jobId) {
+    // Per-job lock allows independent tracks in the same playlist to search
+    // concurrently. Imports still take the original playlist import lock,
+    // and cancellation invalidates the attempt generation before cleanup.
+    return withHonkerLock(`download-job:${payload.jobId}`, async () => {
+      const current = resolveTransferredDownloadPayload(payload);
+      return operation(current);
+    }, { ttlSeconds: 180, waitTimeoutMs: 15 * 60 * 1000 });
+  }
   while (true) {
     const owners = payloadOwners(resolveTransferredDownloadPayload(payload));
     const result = await withDownloadStepLock(owners, async () => {
