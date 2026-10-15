@@ -339,6 +339,42 @@ export function SettingsDownloadClientsSection({
         </SettingsArrFormGroup>
       </SettingsArrFieldSet>
 
+      <SettingsArrFieldSet legend="Provider capacity (scheduler test mode)">
+        <div className="arr-info">
+          When AURRAL_PROVIDER_SCHEDULER=1, each enabled provider has independent
+          download slots. Save settings after editing. Scheduler mode must be
+          validated in an isolated instance before production activation.
+        </div>
+        {enabledClientDefinitions.map((definition) => {
+          const config = integrations[definition.key] || {};
+          const fallback = definition.key === "dmm" ? 1
+            : ["nzbget", "sabnzbd", "deemix"].includes(definition.key) ? 2 : 3;
+          return (
+            <SettingsArrFormGroup
+              key={definition.key}
+              label={`${definition.label} simultaneous jobs`}
+              labelFor={`provider-capacity-${definition.key}`}
+              help="Maximum active Aurral attempts assigned to this download client."
+            >
+              <SettingsInput
+                id={`provider-capacity-${definition.key}`}
+                type="number"
+                min={1}
+                max={8}
+                step={1}
+                value={config.maxActive ?? fallback}
+                onChange={(event) => {
+                  const number = Number(event.target.value);
+                  updateIntegration(definition.key, {
+                    maxActive: Number.isFinite(number) ? Math.min(8, Math.max(1, Math.trunc(number))) : fallback,
+                  });
+                }}
+              />
+            </SettingsArrFormGroup>
+          );
+        })}
+      </SettingsArrFieldSet>
+
       <SettingsArrFieldSet legend="Quality profile">
         <div className="arr-info">
           Choose formats, order, upgrades, and searches for missing tracks.
