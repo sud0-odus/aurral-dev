@@ -231,16 +231,10 @@ async function acquire({ hash, fileId, jobId, payload }) {
     if (id && !preserveFailedTorrent) await rd(`/torrents/delete/${encodeURIComponent(id)}`, { method:'DELETE' }).catch(() => {});
   }
 }
-function matchTrack(album, requested) {
-  const target = norm(requested.title || requested.trackName || requested.name);
-  return (album.tracks || []).find(t => norm(t.filename) === target) || null;
-}
 async function search(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   const request = buildResolvedTrack(job, payload.track);
-  const artist = request.artistName || job.artistName;
-  const albumName = request.albumName || job.albumName;
   const { matches, stats } = await discoverDmmTrack({ request, hash: payload.dmmHash });
   logger.info('dmm', 'Provider-specific catalog search summary', {
     jobId: job.id, ...stats,
