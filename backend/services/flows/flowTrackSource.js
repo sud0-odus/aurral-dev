@@ -1,6 +1,7 @@
 import { lastfmRequest } from "../apiClients/index.js";
 import * as musicData from "../musicDataSource/index.js";
 import { getUserDiscovery } from "../discovery/userDiscovery.js";
+import { userOps } from "../../db/helpers/index.js";
 import { logger } from "../logger.js";
 import { normalizeWeightMap } from "../playlists/flowPlaylistConfig.js";
 import { getBlockedArtistKeys } from "../discovery/feedback.js";
@@ -331,7 +332,87 @@ export class FlowTrackSource {
     if (options?.discoveryCache && typeof options.discoveryCache === "object") {
       return options.discoveryCache;
     }
-    return getUserDiscovery(options?.ownerUserId ?? null, 0).body;
+    // An ownerless flow cannot inherit a specific user's taste profile.
+    if (!Number.isSafeInteger(Number(options?.ownerUserId)) || Number(options?.ownerUserId) < 1) {
+      return { basedOn: [], recommendations: [], topGenres: [], topTags: [] };
+    }
+    return getUserDiscovery(options.ownerUserId, 0).body;
+  }
+
+  _firstActiveAdminId() {
+    const adminIds = userOps
+      .getAllUsers()
+      .filter((user) => user.role === "admin" && user.status === "active")
+      .map((user) => user.id);
+    return adminIds.length > 0 ? Math.min(...adminIds) : null;
+  }
+
+  _normalizeTrackReason(value, fallback = "Flow selection") {
+    const text = String(value || "").trim();
+    return text || fallback;
+  }
+
+  _buildTrackEntry({
+    artistName,
+    trackName,
+    albumName,
+    artistMbid,
+    albumMbid,
+    trackMbid,
+    releaseYear,
+    durationMs,
+    artistAliases,
+    reason,
+  }) {
+    const safeArtist = String(artistName || "").trim();
+    const safeTrack = String(trackName || "").trim();
+    if (!safeArtist || !safeTrack) return null;
+    const safeAlbum = String(albumName || "").trim();
+    const safeMbid = String(artistMbid || "").trim();
+    const safeAlbumMbid = String(albumMbid || "").trim();
+    const safeTrackMbid = String(trackMbid || "").trim();
+    const safeReleaseYear = String(releaseYear || "").trim();
+    const safeDuration =
+      durationMs != null && Number.isFinite(Number(durationMs))
+        ? Math.max(0, Math.round(Number(durationMs)))
+        : null;
+    const normalizedAliases = Array.isArray(artistAliases)
+      ? artistAliases.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [];
+    return {
+      artistName: safeArtist,
+      trackName: safeTrack,
+      albumName: safeAlbum || null,
+      artistMbid: safeMbid || null,
+      albumMbid: safeAlbumMbid || null,
+      trackMbid: safeTrackMbid || null,
+      releaseYear: safeReleaseYear || null,
+      durationMs: safeDuration,
+      artistAliases: normalizedAliases,
+      reason: this._normalizeTrackReason(reason),
+    };
+  }
+
+  _filterTracksByArtists(tracks, includeSet, excludeSet) {
+    return (tracks || []).filter((track) => {
+      const artistKeys = this._artistKeysFromArtist(track);
+      if (artistKeys.length === 0) return false;
+      if (excludeSet && artistKeys.some((key) => excludeSet.has(key))) return false;
+      if (includeSet && includeSet.size > 0 && !artistKeys.some((key) => includeSet.has(key))) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  _filterArtistsByKeySet(artists, excludeSet) {
+    if (!Array.isArray(artists) || artists.length === 0 || !excludeSet?.size) {
+      return Array.isArray(artists) ? artists : [];
+    }
+    return artists.filter((artist) => {
+      const keys = this._artistKeysFromArtist(artist);
+      return !keys.some((key) => excludeSet.has(key));
+    });
   }
 
   async _getLibraryArtistKeySet(options = {}) {
@@ -1785,21 +1866,11 @@ export class FlowTrackSource {
   }
 
   async getMixTracks(limit, options = {}) {
-    const ownerId = Number(options?.ownerUserId);
-    if (!Number.isSafeInteger(ownerId) || ownerId < 1) {
-      throw new Error("Personal Mix requires an assigned playlist owner.");
-    }
-    const profile = this._resolveDiscoveryCache(options);
-    const personalArtistKeys = this._buildArtistKeySet(
-      (profile.basedOn || []).map(seed => ({ name: seed.name, mbid: seed.id })),
-    );
-    const availableArtists = Array.isArray(options?.libraryArtists)
+    const artists = Array.isArray(options?.libraryArtists)
       ? options.libraryArtists
       : [...iterateLibraryArtistProjection({ pageSize: 100 })];
-    const artists = availableArtists.filter(artist =>
-      this._artistKeysFromArtist(artist).some(key => personalArtistKeys.has(key)));
     if (artists.length === 0) {
-      throw new Error("No personally liked/listened/imported artists in library for Mix.");
+      throw new Error("No artists in library. Add artists to enable Mix.");
     }
 
     const shuffled = [...artists].sort(() => 0.5 - Math.random());
