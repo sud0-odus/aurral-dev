@@ -4,7 +4,7 @@ const DEFAULT_ORPHAN_AGE_MS = 30 * 60 * 1000;
 const hasReservations = Boolean(db.prepare(
   "SELECT 1 FROM sqlite_master WHERE type='table' AND name='download_provider_reservations'",
 ).get());
-const SELECT_ORPHANS = db.prepare(`
+const SELECT_ORPHANS_SQL = `
   SELECT j.id, j.download_source AS downloadSource, j.started_at AS startedAt
   FROM playlist_download_jobs j
   WHERE j.status = 'downloading' AND j.started_at IS NOT NULL AND j.started_at < ?
@@ -19,7 +19,7 @@ const SELECT_ORPHANS = db.prepare(`
     ${hasReservations ? `AND NOT EXISTS (
       SELECT 1 FROM download_provider_reservations r WHERE r.job_id = j.id
     )` : ""}
-  ORDER BY j.started_at ASC LIMIT 100`);
+  ORDER BY j.started_at ASC LIMIT 100`;
 
 export function inspectOrphanedDownloadJobs({
   now = Date.now(),
@@ -27,6 +27,12 @@ export function inspectOrphanedDownloadJobs({
   activeJobIds = new Set(),
 } = {}) {
   const ids = activeJobIds instanceof Set ? activeJobIds : new Set(activeJobIds);
-  return SELECT_ORPHANS.all(now - Math.max(60000, minimumAgeMs))
+  // The Honker database may not be attached yet during startup or isolated
+  // test bootstrap. Do not classify jobs as orphaned without that evidence.
+  const hasQueue = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_honker_live'",
+  ).get();
+  if (!hasQueue) return [];
+  return db.prepare(SELECT_ORPHANS_SQL).all(now - Math.max(60000, minimumAgeMs))
     .filter(job => !ids.has(job.id));
 }
