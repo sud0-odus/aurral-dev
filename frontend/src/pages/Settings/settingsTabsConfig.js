@@ -69,7 +69,7 @@ const SETTINGS_SEARCH_METADATA = {
     },
   },
   tasks: {
-    sections: ["Scheduled", "Workers", "Queue"],
+    sections: ["Scheduled", "Workers", "Queue", "Download diagnostics"],
     services: {
       "Background tasks": "jobs workers",
       "Playlist operations": "playlist flow worker",

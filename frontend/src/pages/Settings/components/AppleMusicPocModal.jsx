@@ -205,7 +205,7 @@ export function AppleMusicPocModal({ onClose }) {
         .apple-p5 { display: grid; gap: 18px; min-width: 0; padding: 4px 2px 12px; }
         .apple-p5__intro { display: grid; gap: 6px; }
         .apple-p5__intro p { margin: 0; line-height: 1.55; }
-        .apple-p5__panel { border: 1px solid var(--border-color, #45454d); border-radius: 12px; padding: 16px; min-width: 0; display: grid; gap: 12px; }
+        .apple-p5__panel { border: 1px solid var(--aurral-border); border-radius: 12px; padding: 16px; min-width: 0; display: grid; gap: 12px; }
         .apple-p5__title { font-size: 1rem; font-weight: 700; margin: 0; line-height: 1.35; }
         .apple-p5__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
         .apple-p5__row .btn { white-space: normal; text-align: left; line-height: 1.35; min-height: 36px; }
@@ -215,7 +215,7 @@ export function AppleMusicPocModal({ onClose }) {
         .apple-p5__dot.is-connected { background: #43b987; }
         .apple-p5__note { font-size: .86rem; opacity: .8; line-height: 1.5; }
         .apple-p5__feedback { padding: 12px 14px; border: 1px solid #478b74; border-radius: 9px; background: rgba(36, 130, 99, .12); line-height: 1.5; overflow-wrap: anywhere; }
-        .apple-p5__tracklist { max-height: 275px; overflow-y: auto; overscroll-behavior: contain; padding: 8px 12px 8px 38px; margin: 0; border: 1px solid var(--border-color, #45454d); border-radius: 8px; }
+        .apple-p5__tracklist { max-height: 275px; overflow-y: auto; overscroll-behavior: contain; padding: 8px 12px 8px 38px; margin: 0; border: 1px solid var(--aurral-border); border-radius: 8px; }
         .apple-p5__tracklist li { padding: 5px 0; line-height: 1.4; }
         .apple-p5 textarea { box-sizing: border-box; width: 100%; min-height: 96px; }
         @media(max-width: 600px) { .apple-p5__panel { padding: 12px; } .apple-p5__tracklist { max-height: 210px; } }
@@ -256,7 +256,7 @@ export function AppleMusicPocModal({ onClose }) {
           {inventory && <>
             <p className="apple-p5__note">Discovered {inventory.rows.length} unique playlists · {inventory.rows.filter(p=>p.matches.length).length} previously imported · {inventory.rows.filter(p=>!p.matches.length).length} not imported.</p>
             {(inventory.failures.length > 0 || inventory.scannedGroups < inventory.totalGroups) && <p role="alert" className="apple-p5__note">Partial scan: {inventory.failures.length} recommendation groups failed; {inventory.scannedGroups} of {inventory.totalGroups} groups attempted. Results may be incomplete.</p>}
-            {inventory.rows.map(p => <div key={p.id} className="apple-p5__row" style={{justifyContent:"space-between",borderTop:"1px solid var(--border-color, #45454d)",paddingTop:6}}>
+            {inventory.rows.map(p => <div key={p.id} className="apple-p5__row" style={{justifyContent:"space-between",borderTop:"1px solid var(--aurral-border)",paddingTop:6}}>
               <span>{p.name}</span><span className="apple-p5__note">{comparisons[p.id]?.status === "ready"
                 ? `${comparisons[p.id].matched} matched · ${comparisons[p.id].probable} possible · ${comparisons[p.id].missing} missing · ${comparisons[p.id].ambiguous} review · ${comparisons[p.id].localOnly} local additions`
                 : comparisons[p.id]?.status === "incomplete" ? "Apple track list incomplete — not compared"
@@ -300,7 +300,7 @@ export function AppleMusicPocModal({ onClose }) {
             <p className="apple-p5__note">Found {existingMatches.length} Apple Music playlist{existingMatches.length === 1 ? "" : "s"} with this name in your Aurral account. Tracks have not been compared.</p>
             {existingMatches.map((match) => <p key={match.id}><a className="settings-page__link" href={`/library/playlists/${encodeURIComponent(match.id)}`} target="_blank" rel="noopener noreferrer">View {match.name} in Aurral ({match.trackCount} tracks)</a></p>)}
           </div>}
-          <div className="apple-p5__row" style={{position:"sticky",bottom:0,background:"var(--bg-primary, #222)",padding:"7px 0",zIndex:1}}><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || hasMore || !tracks.length || operation != null || matchStatus !== "ready" || existingMatches.length > 0} onClick={importPlaylist}>{operation != null ? `Import queued (operation #${operation})` : "Import playlist into Aurral"}</button></div>
+          <div className="apple-p5__row" style={{position:"sticky",bottom:0,background:"var(--aurral-surface)",padding:"7px 0",zIndex:1}}><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || hasMore || !tracks.length || operation != null || matchStatus !== "ready" || existingMatches.length > 0} onClick={importPlaylist}>{operation != null ? `Import queued (operation #${operation})` : "Import playlist into Aurral"}</button></div>
         </section>}
       </div>
     </SettingsIntegrationModal>
