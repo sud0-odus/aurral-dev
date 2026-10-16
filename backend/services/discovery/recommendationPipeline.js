@@ -7,6 +7,7 @@ const SOURCE_BASE_WEIGHTS = {
   listenbrainz: 1.3,
   koito: 1.3,
   feedback: 1.5,
+  apple_music: 1.15,
 };
 
 const DISCOVERY_MODE_MULTIPLIERS = {

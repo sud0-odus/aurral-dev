@@ -127,19 +127,19 @@ test.after(async () => {
   await cleanupIsolatedState(isolatedState);
 });
 
-test("personal refresh seeds from liked artists, local plays and the library, never disliked or blocked artists", async () => {
+test("personal refresh uses only per-user seeds, never server library or blocked artists", async () => {
   const result = await discovery.updateUserDiscoveryCache(alice.id);
   assert.equal(result.refreshed, true);
 
   const { body } = await getUserDiscovery(alice.id, 0);
   assert.deepEqual(
     body.basedOn.map((artist) => artist.name).sort(),
-    [LIBRARY.name, LIKED.name, "Played Artist"].sort(),
+    [LIKED.name, "Played Artist"].sort(),
   );
   assert.equal(body.basedOn.find((artist) => artist.name === LIKED.name).source, "feedback");
   assert.deepEqual(
     body.recommendations.map((artist) => artist.name).sort(),
-    [FROM_LIBRARY.name, FROM_LIKED.name, FROM_PLAYED.name].sort(),
+    [FROM_LIKED.name, FROM_PLAYED.name].sort(),
   );
   assert.deepEqual([...body.topGenres].sort(), ["dream pop", "indie", "shoegaze"]);
   for (const artist of body.recommendations) {
@@ -216,7 +216,7 @@ test("tag search and flow plans read the user's own pool", async () => {
   assert.ok(basedOn.some((artist) => artist.name === LIKED.name));
 });
 
-test("flows without an owner read the first admin's pool", async () => {
+test("flows without an owner do not read the first admin's pool", async () => {
   userOps.updateUser(alice.id, { role: "admin" });
   try {
     const source = new FlowTrackSource();
@@ -230,7 +230,7 @@ test("flows without an owner read the first admin's pool", async () => {
       size: 2,
       mix: { discover: 100, mix: 0, trending: 0, focus: 0 },
     });
-    assert.ok(harvested.includes(FROM_LIKED.name));
+    assert.equal(harvested.includes(FROM_LIKED.name), false);
   } finally {
     userOps.updateUser(alice.id, { role: "user" });
   }
