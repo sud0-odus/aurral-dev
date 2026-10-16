@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { resolveIndexedJobFile } from "../libraryFileRelinker.js";
 import path from "node:path";
 import {
   flowPlaylistConfig,
@@ -39,9 +40,11 @@ export async function collectPlaybackPlaylistTracks(entityId, options = {}) {
   const tracks = [];
   for (const job of orderedJobs) {
     const resolved = await resolveExistingTrackPath(job.finalPath, downloadRoot);
-    if (!resolved || !(await isFile(resolved.path))) continue;
+    const mediaPath = resolved && await isFile(resolved.path)
+      ? resolved.path : await resolveIndexedJobFile(job);
+    if (!mediaPath) continue;
     tracks.push({
-      path: resolved.path,
+      path: mediaPath,
       title: String(job.trackName || "").trim() || "Unknown Track",
       artist: String(job.artistName || "").trim() || "Unknown Artist",
       ...(job.albumName ? { album: job.albumName } : {}),

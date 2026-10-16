@@ -16,6 +16,7 @@ import {
   isDownloadJobCancelled,
   isPipelinePayloadActive,
   listDownloadProviderWork,
+  listOrphanedSlskdSearchIds,
   restoreDownloadJobCancellations,
   restorePlaylistDownloadWork,
 } from "./downloadCancellation.js";
@@ -361,6 +362,28 @@ function refreshJobs(jobs) {
     const current = downloadTracker.getJob(job.id);
     return current ? { ...job, ...current } : job;
   });
+}
+
+/** Stop searches whose original download job no longer exists. Retain work
+ * rows after failures so a future startup can retry the cleanup. */
+export async function stopOrphanedSlskdSearches() {
+  const client = getDownloadClient("slskd");
+  if (!client?.isConfigured?.()) return { checked: 0, cleaned: 0 };
+  const ids = listOrphanedSlskdSearchIds();
+  let cleaned = 0;
+  for (const id of ids) {
+    try {
+      const removed = await client.deleteSearch(id, { timeout: 20000 });
+      if (!removed) throw new Error("slskd did not confirm search removal");
+      clearDownloadProviderWork({ provider: "slskd-search", workId: id });
+      cleaned++;
+    } catch (error) {
+      logger.warn("slskd", "Failed to clean orphaned search", {
+        searchId: id, reason: error?.message || String(error),
+      });
+    }
+  }
+  return { checked: ids.length, cleaned };
 }
 
 export function markDownloadWorkCancelledForJobs(jobs = []) {

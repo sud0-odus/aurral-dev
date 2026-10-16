@@ -22,6 +22,7 @@ import {
   musicbrainzResolveLibraryArtistMbid,
 } from "./apiClients/index.js";
 import { logger } from "./logger.js";
+import { reconcileCompletedJobFileLocations, scanReferenceLibraryRoots } from "./libraryFileRelinker.js";
 import {
   activeLidarrRoots,
   createLibraryScanExclusion,
@@ -218,6 +219,12 @@ export async function scanConfiguredLibrary({
         };
       }
     }
+    // Reconcile read-only archive mounts alongside the ordinary Library scan.
+    // Only completed jobs whose original paths disappeared may be relinked.
+    if (!targeted) {
+      await scanReferenceLibraryRoots({ metadataByPath: jobMetadataByPath, force });
+    }
+    await reconcileCompletedJobFileLocations();
     if (lidarrActive) assignLidarrAlbumOwners();
     else if (!targeted) lidarrRemoved = removeLidarrLibrary();
     artistsResolved = await resolveUnmatchedLibraryArtists();

@@ -142,10 +142,10 @@ test("without a Last.fm key each user gets personal recommendations from ListenB
 
   const { body } = await getUserDiscovery(alice.id, 0);
   assert.equal(body.provider, "listenbrainz");
-  assert.deepEqual(body.basedOn.map((artist) => artist.name).sort(), [LIBRARY.name, LIKED.name].sort());
+  assert.deepEqual(body.basedOn.map((artist) => artist.name).sort(), [LIKED.name]);
   assert.deepEqual(body.recommendations.map((artist) => artist.name), [SHARED_PICK.name, CLOSE_PICK.name]);
-  assert.equal(body.recommendations[0].seedCount, 2);
-  assert.deepEqual([...body.topGenres].sort(), ["dream pop", "shoegaze"]);
+  assert.equal(body.recommendations[0].seedCount, 1);
+  assert.deepEqual([...body.topGenres].sort(), []);
   assert.equal(body.recommendations.some((artist) => artist.tags.includes("seen live")), false);
   assert.equal(requests.some((url) => url.hostname === "ws.audioscrobbler.com"), false);
   const likedTagLookups = requests.filter(

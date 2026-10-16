@@ -1,5 +1,6 @@
 import path from "path";
 import { downloadTracker } from "./downloadTracker.js";
+import { inspectOrphanedDownloadJobs } from "./downloadWatchdog.js";
 import { playlistManager } from "../playlists/playlistManager.js";
 import { flowPlaylistConfig } from "../playlists/flowPlaylistConfig.js";
 import { flowTrackSource } from "../flows/flowTrackSource.js";
@@ -63,6 +64,8 @@ export class DownloadWorker {
     this.reuseRepairCursor = 0;
     this.processLoop = null;
     this.processTimer = null;
+    this.healthTimer = null;
+    this.watchdogCandidates = new Set();
     this.currentJob = null;
     this.lastDequeuedPlaylistType = null;
     this.reuseRepairInFlight = null;
@@ -514,7 +517,43 @@ export class DownloadWorker {
     };
 
     this.processLoop();
+    // One watchdog observes durable queue claims and provider work. A track is
+    // requeued only after two consecutive checks show it orphaned.
+    if (!this.healthTimer) {
+      this.healthTimer = setInterval(() => {
+        if (!this.running) return;
+        void this.checkDownloadHealth().catch(error =>
+          logger.warn("watchdog", "Download worker health check failed", {
+            reason: error?.message || String(error),
+          }));
+      }, 30000);
+      this.healthTimer.unref?.();
+    }
     this.scheduleReuseLinkRepair(true);
+  }
+
+  async checkDownloadHealth() {
+    const orphaned = inspectOrphanedDownloadJobs({
+      activeJobIds: new Set(this.activeJobs.keys()),
+    });
+    const candidates = new Set(orphaned.map(job => job.id));
+    let requeued = 0;
+    for (const job of orphaned) {
+      if (!this.watchdogCandidates.has(job.id)) continue;
+      const current = downloadTracker.getJob(job.id);
+      if (!current || current.status !== "downloading" || this.activeJobs.has(job.id)) continue;
+      if (downloadTracker.setPending(job.id, "Watchdog recovered orphaned download job")) {
+        requeued++;
+        logger.warn("watchdog", "Recovered unclaimed download job", {
+          jobId: job.id, provider: job.downloadSource || null,
+        });
+      }
+    }
+    this.watchdogCandidates = candidates;
+    if (requeued) this.wake(0);
+    const pending = downloadTracker.getNextPending();
+    if (pending && !this.processTimer) this.wake(0);
+    return { orphanCandidates: candidates.size, requeued };
   }
 
   _requestStop() {
@@ -522,7 +561,12 @@ export class DownloadWorker {
       return false;
     }
     this.running = false;
+    this.watchdogCandidates.clear();
     this.runGeneration += 1;
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
+    }
     if (this.processTimer) {
       clearTimeout(this.processTimer);
       this.processTimer = null;

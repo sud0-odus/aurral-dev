@@ -122,7 +122,8 @@ test("serves temporary artwork and replaces it when the photo source recovers", 
   });
   const playlist = flowPlaylistConfig.createStaticPlaylist({
     name: "Offline Photos",
-    tracks: [{ artistName: "A", trackName: "One" }],
+    tracks: [{ artistName: "A", trackName: "One",
+      artworkUrl: "https://e-cdns-images.dzcdn.net/images/cover/demo/250x250.jpg" }],
   });
   const manager = makeManager();
 
@@ -151,7 +152,7 @@ test("replaces the old generated JPEG fallback with photo artwork", async (t) =>
   t.mock.method(axios, "get", async () => ({ data: source }));
   const playlist = flowPlaylistConfig.createStaticPlaylist({
     name: "Legacy Fallback",
-    tracks: [{ artistName: "A", trackName: "One" }],
+    tracks: [{ artistName: "A", trackName: "One", artworkUrl: "https://e-cdns-images.dzcdn.net/images/cover/legacy/250x250.jpg" }],
   });
   const manager = makeManager();
   await fs.mkdir(manager.libraryRoot, { recursive: true });

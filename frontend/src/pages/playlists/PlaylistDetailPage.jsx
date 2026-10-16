@@ -113,6 +113,7 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
   const [sharedWith, setSharedWith] = useState([]);
   const canManageSharingSummary = user?.role === "admin" ||
     (playlist.ownerUserId != null && Number(playlist.ownerUserId) === Number(user?.id));
+  const viewerUsersKey = (playlist.viewerUserIds || []).join(",");
   useEffect(() => {
     let cancelled = false;
     setSharedWith([]);
@@ -121,7 +122,7 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
       .then(data => { if (!cancelled) setSharedWith(Array.isArray(data?.recipients) ? data.recipients : []); })
       .catch(() => { if (!cancelled) setSharedWith([]); });
     return () => { cancelled = true; };
-  }, [canManageSharingSummary, playlist.id, playlist.viewerUserIds?.join(",")]);
+  }, [canManageSharingSummary, playlist.id, viewerUsersKey]);
   const showTrackAvailability = playlist.showTrackAvailability === true;
   const { tracks: savedTracks, loading, error, refresh } = usePlaylistTracks(playlist.id, {
     pollAvailability: showTrackAvailability,
@@ -477,12 +478,12 @@ function PlaylistSharingEditor({ playlist, onClose, showSuccess }) {
       setError(err.response?.data?.error || err.message || "Could not save sharing settings");
     } finally { setSaving(false); }
   };
-  return <div role="presentation" style={{position:"fixed",inset:0,zIndex:1500,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",padding:16}}>
-    <section role="dialog" aria-modal="true" aria-label={`Share ${playlist.name}`} style={{width:"min(460px,100%)",border:"1px solid var(--border-color,#555)",borderRadius:12,background:"var(--bg-primary,#1e1e26)",padding:20,color:"inherit"}}>
+  return <div role="presentation" style={{position:"fixed",inset:0,zIndex:1500,background:"var(--aurral-overlay)",display:"grid",placeItems:"center",padding:16}}>
+    <section role="dialog" aria-modal="true" aria-label={`Share ${playlist.name}`} style={{width:"min(460px,100%)",border:"1px solid var(--aurral-border)",borderRadius:12,background:"var(--aurral-surface)",padding:20,color:"inherit"}}>
       <h2 style={{marginTop:0}}>Share {playlist.name}</h2>
       <p>Select Aurral users who can view and play this playlist. You remain the owner; recipients cannot edit or delete it.</p>
       {loading && <p role="status">Loading users…</p>}
-      {error && <p role="alert" style={{color:"#f99"}}>{error}</p>}
+      {error && <p role="alert" style={{color:"var(--aurral-danger)"}}>{error}</p>}
       {loaded && <div style={{display:"grid",gap:10,margin:"16px 0"}}>{users.map(person => <label key={person.id} style={{display:"flex",gap:10,alignItems:"center"}}>
         <input type="checkbox" checked={selected.includes(Number(person.id))} disabled={saving} onChange={e => setSelected(previous => e.target.checked ? [...previous,Number(person.id)] : previous.filter(id => id !== Number(person.id)))} />
         {person.username}

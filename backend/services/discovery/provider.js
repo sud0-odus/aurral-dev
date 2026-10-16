@@ -7,10 +7,7 @@ import {
 } from "../apiClients/index.js";
 import { logger } from "../logger.js";
 import { getListenHistoryProfile, hasListenHistoryProfile } from "../listeningHistory.js";
-import {
-  getLibraryArtistKeyProjection,
-  sampleLibraryArtistsForDiscovery,
-} from "../libraryQueryService.js";
+import { getLibraryArtistKeyProjection } from "../libraryQueryService.js";
 import {
   buildExistingArtistKeySet,
   mergeResolvedRecommendations,
@@ -32,7 +29,6 @@ import {
   getDiscoveryNetworkConcurrency,
   getDiscoveryRecommendationSeedLimit,
   createDiscoveryRunId,
-  interleaveLists,
   mapWithConcurrency,
   DISCOVERY_QUALITY_ENRICHED,
 } from "./helpers.js";
@@ -51,6 +47,9 @@ import {
 import { buildTagProfile, collectSeedTags } from "./tasteProfile.js";
 import { buildRecommendationsFromSeeds } from "./recommendations.js";
 import { getTopPlayedArtists } from "../playEventService.js";
+import { scrobbleConnectionStore } from "../scrobbleConnectionStore.js";
+import { getAppleMusicPlaylistSeeds, PERSONAL_TASTE_PROFILE_VERSION } from "./applePlaylistTaste.js";
+import { getPersonalHistoryProfiles, mergePersonalArtistSources } from "./personalTasteSources.js";
 
 const USER_REFRESH_STAGGER_SECONDS = 15;
 const GLOBAL_REFRESH_RETRY_SECONDS = 60;
@@ -348,28 +347,32 @@ const feedbackArtists = (feedback, action) =>
     .map((entry) => ({ mbid: entry.artistId, artistName: entry.artistName }));
 
 const collectUserSeeds = async (user, feedback) => {
-  let externalHistory = [];
-  const profile = getListenHistoryProfile(user);
-  try {
-    externalHistory = (
-      await fetchListenHistoryArtists(profile, getLastfmDiscoveryPeriod())
-    ).map((artist) => ({ ...artist, source: profile.listenHistoryProvider }));
-  } catch (error) {
-    logger.error(
-      'discovery',
-      `[Discovery] Failed to fetch ${profile.listenHistoryProvider} artists for user ${user.id}: ${error.message}`,
-    );
-  }
+  // Combine the signed-in user's own provider profiles; never take history from
+  // the server owner or from another person's music library.
+  const unique = getPersonalHistoryProfiles(user, scrobbleConnectionStore.getConnections(user.id));
+  const groups = await Promise.all(unique.map(async profile => {
+    try {
+      const artists = await fetchListenHistoryArtists(profile, getLastfmDiscoveryPeriod());
+      return artists.map(artist => ({ ...artist, source: profile.listenHistoryProvider }));
+    } catch (error) {
+      logger.warn("discovery", "Personal history provider unavailable", {
+        userId: user.id, provider: profile.listenHistoryProvider, reason: error.message,
+      });
+      return [];
+    }
+  }));
   const localHistory = getTopPlayedArtists(user.id, { limit: 50 }).map((artist) => ({
     ...artist,
     source: "local",
   }));
-  const library = sampleLibraryArtistsForDiscovery({ recentLimit: 20, randomLimit: 40 });
-
+  const appleMusic = getAppleMusicPlaylistSeeds(dbOps.getSettings().sharedPlaylists, user.id);
+  const personalHistory = mergePersonalArtistSources([
+    ...groups, localHistory, appleMusic,
+  ]);
   return selectDiscoverySeeds({
     likedArtists: feedbackArtists(feedback, "more_like_this"),
-    historyArtists: interleaveLists(externalHistory, localHistory),
-    libraryArtists: interleaveLists(library.recent, library.random),
+    historyArtists: personalHistory,
+    libraryArtists: [],
     limit: getDiscoveryRecommendationSeedLimit(),
     excludedKeys: buildExistingArtistKeySet([
       ...feedbackArtists(feedback, "less_like_this"),
@@ -431,10 +434,8 @@ const buildUserRecommendations = async ({ userId, user, existing, startedAt }) =
   });
   const recommendations = mergeRetainedRecommendationPool({
     freshRecommendations,
-    existingRecommendations: shouldRetainDiscoveryRecommendations(
-      existing.provider,
-      getMusicDataSourceName(),
-    )
+    existingRecommendations: existing.metadata?.tasteProfileVersion === PERSONAL_TASTE_PROFILE_VERSION &&
+      shouldRetainDiscoveryRecommendations(existing.provider, getMusicDataSourceName())
       ? existing.recommendations || []
       : [],
     existingArtistKeys,
@@ -503,7 +504,7 @@ export const updateUserDiscoveryCache = async (userId, options = {}) => {
         topGenres,
         recommendationQuality: DISCOVERY_QUALITY_ENRICHED,
         discoveryRunId: createDiscoveryRunId(),
-        metadata: { lastRunStartedAt: startedAt },
+        metadata: { lastRunStartedAt: startedAt, tasteProfileVersion: PERSONAL_TASTE_PROFILE_VERSION },
       },
       namespace,
     );

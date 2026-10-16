@@ -1,4 +1,6 @@
 import { downloadTracker } from "../../../services/downloadJobs/downloadTracker.js";
+import { getDownloadOperationalSnapshot } from "../../../services/downloadJobs/downloadOperationalSnapshot.js";
+import { queryDownloadEvents } from "../../../services/downloadJobs/downloadEventHistory.js";
 import { downloadWorker } from "../../../services/downloadJobs/downloadWorker.js";
 import { startDownloadPipelineWorker } from "../../../services/downloadPipelineWorker.js";
 import { playlistManager } from "../../../services/playlists/playlistManager.js";
@@ -111,6 +113,12 @@ async function runQualityChecksLocally(playlistIds) {
 }
 
 export function registerJobs(router) {
+  router.get("/operations/events", requireAdmin, noCache, (req, res) => {
+    res.json(queryDownloadEvents(req.query));
+  });
+  router.get("/operations/diagnostics", requireAdmin, noCache, (_req, res) => {
+    res.json(getDownloadOperationalSnapshot());
+  });
   router.get("/status", noCache, (req, res) => {
     res.json(getPlaylistStatusSnapshot({ user: req.user }));
   });

@@ -8,6 +8,7 @@ import {
 } from "../importLists/deezerPlaylists.js";
 import { resolveArtistAndAlbumMbids } from "../apiClients/index.js";
 import { getUserDiscovery } from "./userDiscovery.js";
+import { rankPersonalEditorialPlaylists } from "./editorialPlaylistRanking.js";
 
 const PROVIDER = "deezer-playlist";
 const SYNC_INTERVAL_HOURS = 24;
@@ -54,7 +55,13 @@ const uniqueTerms = (values) => {
 
 async function getForYouPlaylists(userId) {
   const { body } = await getUserDiscovery(userId, 0, 0);
-  const terms = uniqueTerms([...(body.topGenres || []), ...(body.topTags || [])]);
+  // Prefer the owner's listening-history/Apple/import artists, then personal
+  // genres. The same globally popular genre no longer dominates every user.
+  const terms = uniqueTerms([
+    ...(body.basedOn || []).slice(0, 3).map(seed => seed.name || seed.artistName),
+    ...(body.topGenres || []),
+    ...(body.topTags || []),
+  ]);
   const results = await Promise.allSettled(terms.map(searchEditorialPlaylists));
   const seen = new Set();
   const playlists = [];
@@ -65,7 +72,7 @@ async function getForYouPlaylists(userId) {
       playlists.push(playlist);
     }
   }
-  return playlists.slice(0, FOR_YOU_LIMIT);
+  return rankPersonalEditorialPlaylists(playlists, body, { limit: FOR_YOU_LIMIT });
 }
 
 export async function getEditorialShelf(user) {

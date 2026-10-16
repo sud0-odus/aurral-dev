@@ -24,7 +24,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Review dependency changes
-        if: github.event_name == 'pull_request'
+        # Enable with repository variable after GitHub Dependency Graph is available.
+        # Public forks without the graph fail before project validation begins.
+        if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
@@ -38,6 +40,9 @@ jobs:
             docs/package-lock.json
 
       - run: npm ci
+
+      - name: Syntax-check CT119 deployment helper
+        run: bash -n scripts/deploy-ct119-integration.sh
 
       - run: npm run lint
 

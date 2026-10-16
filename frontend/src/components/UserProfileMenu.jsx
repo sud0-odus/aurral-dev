@@ -66,7 +66,7 @@ function UserProfileMenu() {
       {menuOpen && (
         <div className="app-profile-menu__dropdown" role="menu">
           {username && (
-            <div style={{ padding: "0.75rem 1rem", fontSize: "0.8rem", borderBottom: "1px solid var(--border-color, rgba(255,255,255,0.12))" }}>
+            <div style={{ padding: "0.75rem 1rem", fontSize: "0.8rem", borderBottom: "1px solid var(--aurral-border)" }}>
               Signed in as <strong>{username}</strong>
             </div>
           )}

@@ -4,6 +4,7 @@ import { dbOps } from "../../db/helpers/index.js";
 import { flowPlaylistConfig } from "./flowPlaylistConfig.js";
 import { downloadTracker } from "../downloadJobs/downloadTracker.js";
 import { writePlaylistArtworkWebpFromBuffer } from "../playlistArtwork.js";
+import { getPlaylistArtworkSources } from "../playlistArtworkSources.js";
 import {
   getArtworkExtensionForStyle,
   getPlaylistArtworkStyle,
@@ -143,16 +144,18 @@ export class PlaylistManager {
     const suppressed = await this._isArtworkGenerationSuppressed(safeRoot, baseName);
     if (suppressed) return;
     const artworkContext = this.getArtworkContextForPlaylistId(playlistType);
+    const sources = artworkContext ? getPlaylistArtworkSources(artworkContext.entity) : { imageUrls: [], artistNames: [] };
     const existing = await this.resolveArtworkFile(playlistType);
     let shouldGenerate = !existing;
     const existingStat = existing ? await fs.stat(existing.safePath).catch(() => null) : null;
     const existingIdentity = existingStat
       ? `${existing.safePath}:${existingStat.size}:${existingStat.mtimeMs}`
       : existing?.safePath;
-    if (style === "photo" && existing && !this._verifiedArtworkFiles.has(existingIdentity)) {
+    if (style === "photo" && existing && sources.imageUrls.length && !this._verifiedArtworkFiles.has(existingIdentity)) {
       shouldGenerate = await isGeneratedPlaylistArtworkFallback(existing.safePath, {
         title: artworkContext?.title || playlistName,
         kind: artworkContext?.kind || artworkKind,
+        artistNames: sources.artistNames,
       });
       if (!shouldGenerate) this._verifiedArtworkFiles.add(existingIdentity);
     }
@@ -162,6 +165,8 @@ export class PlaylistManager {
           outputPath: artworkPath,
           title: artworkContext?.title || playlistName,
           kind: artworkContext?.kind || artworkKind,
+          ...sources,
+          paletteSeed: playlistType,
         });
       } catch (error) {
         console.warn(
@@ -173,6 +178,7 @@ export class PlaylistManager {
             title: artworkContext?.title || playlistName,
             kind: artworkContext?.kind || artworkKind,
             style: "aurral",
+            ...sources,
           }).catch((fallbackError) =>
             console.warn(
               `[PlaylistManager] Fallback artwork failed: ${fallbackError.message}`,
@@ -384,9 +390,9 @@ export class PlaylistManager {
 
   getArtworkContextForPlaylistId(playlistId) {
     const flow = flowPlaylistConfig.getFlow(playlistId);
-    if (flow) return { kind: "Flow", title: flow.name };
+    if (flow) return { kind: "Flow", title: flow.name, entity: flow };
     const playlist = flowPlaylistConfig.getStaticPlaylist(playlistId);
-    if (playlist) return { kind: "Playlist", title: playlist.name };
+    if (playlist) return { kind: "Playlist", title: playlist.name, entity: playlist };
     return null;
   }
 
@@ -497,9 +503,12 @@ export class PlaylistManager {
     const artworkContext = this.getArtworkContextForPlaylistId(playlistId);
     const title = artworkContext?.title || resolved.playlistName;
     const kind = artworkContext?.kind || this.getArtworkKindForPlaylistId(playlistId);
+    const sources = artworkContext ? getPlaylistArtworkSources(artworkContext.entity) : { imageUrls: [], artistNames: [] };
     let outputPath;
     try {
-      outputPath = await writeGeneratedPlaylistArtwork({ outputPath: artworkPath, title, kind });
+      outputPath = await writeGeneratedPlaylistArtwork({
+        outputPath: artworkPath, title, kind, ...sources, paletteSeed: playlistId,
+      });
     } catch (error) {
       if (style !== "photo") throw error;
       outputPath = await writeGeneratedPlaylistArtwork({
@@ -507,6 +516,7 @@ export class PlaylistManager {
         title,
         kind,
         style: "aurral",
+        ...sources,
       });
     }
     await this._setArtworkGenerationSuppressed(resolved.safeRoot, resolved.baseName, false);

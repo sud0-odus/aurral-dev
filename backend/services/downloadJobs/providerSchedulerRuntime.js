@@ -2,6 +2,7 @@ import { db } from "../../config/db-sqlite.js";
 import { dbOps } from "../../db/helpers/index.js";
 import { getDownloadSourceStatus } from "../downloadSourceService.js";
 import { planProviderDispatch, PROVIDER_SOURCES } from "./providerSchedulerPolicy.js";
+import { recordDownloadEvent } from "./downloadEventHistory.js";
 
 // Opt-in until the real provider integrations have been exercised in staging.
 export const providerSchedulerEnabled = () => process.env.AURRAL_PROVIDER_SCHEDULER === "1";
@@ -123,6 +124,8 @@ export function reservePipelineProvider(payload) {
     } else {
       insertReservation.run(payload.jobId, payload.downloadAttemptId, assignment.providerId, now, now);
     }
+    if(old?.provider_id!==assignment.providerId) recordDownloadEvent({
+      jobId:payload.jobId,category:"scheduler",event:"provider_selected",provider:assignment.providerId});
     return {
       ...payload,
       ...assignment,

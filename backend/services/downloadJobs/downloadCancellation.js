@@ -226,6 +226,16 @@ export function listDownloadProviderWork({
   ).all(...params);
 }
 
+const orphanedSearchWorkStmt = db.prepare(`
+  SELECT DISTINCT work_id FROM weekly_flow_download_provider_work AS work
+  WHERE provider = 'slskd-search'
+    AND NOT EXISTS (SELECT 1 FROM playlist_download_jobs AS job WHERE job.id = work.job_id)
+  ORDER BY work_id`);
+
+export function listOrphanedSlskdSearchIds() {
+  return orphanedSearchWorkStmt.all().map(row => String(row.work_id));
+}
+
 export function clearDownloadProviderWork({ provider, workId } = {}) {
   const safeProvider = normalizeId(provider);
   const safeWorkId = normalizeId(workId);
@@ -244,7 +254,10 @@ export function isPipelinePayloadActive(payload = {}) {
   if (payload.downloadAttemptId !== undefined && getActiveDownloadAttemptId(jobId) !== (payload.downloadAttemptId || null)) return false;
   if (jobId) {
     const owner = db.prepare("SELECT playlist_id, playlist_type, playlist_generation FROM playlist_download_jobs WHERE id = ?").get(jobId);
-    if (owner && payload.playlistId && ((owner.playlist_id || owner.playlist_type) !== payload.playlistId ||
+    // Jobs removed by reset, upgrade reconciliation or cancellation must not
+    // continue searching, reserving slots, or importing from stale payloads.
+    if (!owner) return false;
+    if (payload.playlistId && ((owner.playlist_id || owner.playlist_type) !== payload.playlistId ||
         Number(owner.playlist_generation || 0) !== Number(payload.playlistGeneration || 0))) return false;
   }
 
