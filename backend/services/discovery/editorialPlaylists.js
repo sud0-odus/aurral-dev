@@ -8,6 +8,7 @@ import {
 } from "../importLists/deezerPlaylists.js";
 import { resolveArtistAndAlbumMbids } from "../apiClients/index.js";
 import { getUserDiscovery } from "./userDiscovery.js";
+import { rankPersonalEditorialPlaylists } from "./editorialPlaylistRanking.js";
 
 const PROVIDER = "deezer-playlist";
 const SYNC_INTERVAL_HOURS = 24;
@@ -71,16 +72,7 @@ async function getForYouPlaylists(userId) {
       playlists.push(playlist);
     }
   }
-  const artistTerms = (body.basedOn || []).slice(0, 3)
-    .map(seed => String(seed.name || seed.artistName || "").trim().toLowerCase())
-    .filter(Boolean);
-  return playlists.map((playlist, index) => {
-    const description = `${playlist.name || ""} ${playlist.description || ""}`.toLowerCase();
-    const matchedArtists = artistTerms.filter(term => description.includes(term)).length;
-    return { playlist, score: matchedArtists * 100 - index };
-  }).sort((a, b) => b.score - a.score)
-    .slice(0, FOR_YOU_LIMIT)
-    .map(({ playlist }) => playlist);
+  return rankPersonalEditorialPlaylists(playlists, body, { limit: FOR_YOU_LIMIT });
 }
 
 export async function getEditorialShelf(user) {
