@@ -113,10 +113,12 @@ test("playlist deletion invalidates queued payloads across recreation", () => {
   const recreatedGeneration = activatePlaylistDownloadGeneration(playlistId);
   assert.equal(recreatedGeneration, firstGeneration + 1);
   assert.equal(isPipelinePayloadActive(payload), false);
+  const newJobId = downloadTracker.addJob({ artistName: "Generation Artist",
+    trackName: "Recreated Track" }, playlistId);
   assert.equal(
     isPipelinePayloadActive({
       ...payload,
-      jobId: "job-two",
+      jobId: newJobId,
       playlistGeneration: recreatedGeneration,
     }),
     true,
