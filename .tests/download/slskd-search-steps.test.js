@@ -274,3 +274,19 @@ for (const phase of ["search", "download"]) {
     assert.equal(transferHistoryCount(), 0);
   });
 }
+
+test("a dropped pipeline search is deleted even when the job no longer exists", async (t) => {
+  const soulseek = await startSoulseek(t);
+  soulseek.loggedIn = true;
+  const jobId = downloadTracker.addJob({
+    artistName: "Gone Artist", trackName: "Gone Track",
+    albumName: "Gone Album", durationMs: 200000,
+  }, "library");
+  const searching = await processPipelinePayload({ phase: "search", source: "slskd", jobId });
+  const searchId = searching.activeSearch.id;
+  assert.ok(searchId);
+  downloadTracker.removeJob(jobId);
+  const discarded = await processPipelinePayload(searching);
+  assert.equal(discarded, null);
+  assert.ok(soulseek.deleted.includes(`/api/v0/searches/${searchId}`));
+});
