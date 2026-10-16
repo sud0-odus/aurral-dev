@@ -254,7 +254,10 @@ export function isPipelinePayloadActive(payload = {}) {
   if (payload.downloadAttemptId !== undefined && getActiveDownloadAttemptId(jobId) !== (payload.downloadAttemptId || null)) return false;
   if (jobId) {
     const owner = db.prepare("SELECT playlist_id, playlist_type, playlist_generation FROM playlist_download_jobs WHERE id = ?").get(jobId);
-    if (owner && payload.playlistId && ((owner.playlist_id || owner.playlist_type) !== payload.playlistId ||
+    // Jobs removed by reset, upgrade reconciliation or cancellation must not
+    // continue searching, reserving slots, or importing from stale payloads.
+    if (!owner) return false;
+    if (payload.playlistId && ((owner.playlist_id || owner.playlist_type) !== payload.playlistId ||
         Number(owner.playlist_generation || 0) !== Number(payload.playlistGeneration || 0))) return false;
   }
 
