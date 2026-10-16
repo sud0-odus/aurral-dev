@@ -226,6 +226,16 @@ export function listDownloadProviderWork({
   ).all(...params);
 }
 
+const orphanedSearchWorkStmt = db.prepare(`
+  SELECT DISTINCT work_id FROM weekly_flow_download_provider_work AS work
+  WHERE provider = 'slskd-search'
+    AND NOT EXISTS (SELECT 1 FROM playlist_download_jobs AS job WHERE job.id = work.job_id)
+  ORDER BY work_id`);
+
+export function listOrphanedSlskdSearchIds() {
+  return orphanedSearchWorkStmt.all().map(row => String(row.work_id));
+}
+
 export function clearDownloadProviderWork({ provider, workId } = {}) {
   const safeProvider = normalizeId(provider);
   const safeWorkId = normalizeId(workId);

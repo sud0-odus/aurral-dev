@@ -1443,6 +1443,12 @@ export async function discardSlskdDownload({ sourcePath, transferId, username })
   });
 }
 
+export async function discardSlskdSearch(payload) {
+  if (!payload?.activeSearch?.id || !slskdClient.isConfigured()) return;
+  searchMonitors.delete(payload.activeSearch.id);
+  await stopSearch(payload.activeSearch.id);
+}
+
 export function processSlskdPipelinePayload(payload, helpers) {
   switch (payload.phase) {
     case "search":
