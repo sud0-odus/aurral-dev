@@ -43,6 +43,7 @@ test("photo source failures preserve existing playlist artwork", async (t) => {
       kind: "Playlist",
       style: "photo",
       paletteSeed: "test",
+      imageUrls: ["https://e-cdns-images.dzcdn.net/images/cover/test/250x250.jpg"],
     }),
     /503/,
   );
