@@ -41,6 +41,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Syntax-check CT119 deployment helper
+        run: bash -n scripts/deploy-ct119-integration.sh
+
       - run: npm run lint
 
       - name: Build app
