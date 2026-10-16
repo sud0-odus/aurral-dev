@@ -524,7 +524,7 @@ export function SettingsTasksTab({ showError, showSuccess }) {
             <thead><tr><th>When</th><th>Job</th><th>Event</th><th>Provider</th><th>Details</th></tr></thead>
             <tbody>{(diagnostics.data?.recentEvents || []).slice(0,65).map(entry => (
               <tr key={entry.id}><td>{new Date(entry.occurredAt).toLocaleString()}</td>
-                <td title={entry.jobId||""}>{entry.jobId?.slice(0,8)||"—"}</td>
+                <td>{entry.jobId?.slice(0,8)||"—"}</td>
                 <td>{entry.event}</td><td>{entry.provider||"—"}</td>
                 <td>{entry.detail||"—"}</td></tr>
             ))}</tbody>
