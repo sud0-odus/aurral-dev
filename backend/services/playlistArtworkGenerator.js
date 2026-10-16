@@ -113,8 +113,6 @@ export async function buildGeneratedPlaylistArtworkBuffer({
     imageBuffer: sourceBuffer,
     title: displayTitle,
     paletteSeed,
-    imageUrls,
-    artistNames,
   });
 }
 
@@ -145,6 +143,8 @@ export async function writeGeneratedPlaylistArtwork({
     kind,
     style: resolvedStyle,
     paletteSeed,
+    imageUrls,
+    artistNames,
   });
 
   for (const extension of [".jpg", ".webp", ".png"]) {
