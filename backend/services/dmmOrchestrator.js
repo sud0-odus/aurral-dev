@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { dmmToken, dmmStagingRoot } from './dmmSettings.js';
 import { logger } from './logger.js';
 import { searchDmmAlbums, getDmmAlbum } from './dmmClient.js';
+import { discoverDmmTrack } from './dmmSearch.js';
 import { downloadTracker } from './downloadJobs/downloadTracker.js';
 import { buildResolvedJobTrack as buildResolvedTrack, commitDownloadedFile, joinUnderRoot, buildTrackFileName, writeAudioMetadata } from './downloadUtils.js';
 import { resolveDownloadRoot } from './downloadPaths.js';
@@ -240,16 +241,12 @@ async function search(payload, helpers) {
   const request = buildResolvedTrack(job, payload.track);
   const artist = request.artistName || job.artistName;
   const albumName = request.albumName || job.albumName;
-  const albums = payload.dmmHash
-    ? [await getDmmAlbum(payload.dmmHash)]
-    : await findDmmEditions(artist, albumName, 48);
-  const matches = [];
-  for (const item of albums.slice(0,5)) {
-    const album = await getDmmAlbum(item.hash);
-    const track = matchTrack(album, { title: request.title || request.trackName || job.trackName });
-    if (track) matches.push({hash:album.hash, fileId:track.fileId, filename:track.filename, albumName:album.album, link:track.link || null, expectedBytes:track.bytes || null});
-  }
-  if (!matches.length) return helpers.failOrTryNextSource(payload, job, 'No exact DMM album/track match');
+  const { matches, stats } = await discoverDmmTrack({ request, hash: payload.dmmHash });
+  logger.info('dmm', 'Provider-specific catalog search summary', {
+    jobId: job.id, ...stats,
+  });
+  if (!matches.length) return helpers.failOrTryNextSource(
+    payload, job, `No matching DMM recording (${stats.reason})`);
   logger.info('dmm','Matched music catalog candidate',{jobId:job.id,candidateCount:matches.length});
   return {...payload, source:'dmm', phase:'download', dmmCandidates:matches, dmmCandidateIndex:0};
 }
