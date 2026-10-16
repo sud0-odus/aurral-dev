@@ -63,6 +63,7 @@ export class DownloadWorker {
     this.reuseRepairCursor = 0;
     this.processLoop = null;
     this.processTimer = null;
+    this.healthTimer = null;
     this.currentJob = null;
     this.lastDequeuedPlaylistType = null;
     this.reuseRepairInFlight = null;
@@ -514,6 +515,21 @@ export class DownloadWorker {
     };
 
     this.processLoop();
+    // Periodic recovery for a worker that is running but stopped dequeuing.
+    // Never change active job status or interrupt slskd/SABnzbd transfers.
+    if (!this.healthTimer) {
+      this.healthTimer = setInterval(() => {
+        if (!this.running) return;
+        const pending = downloadTracker.getNextPending();
+        if (pending && !this.processTimer) {
+          logger.debug("watchdog", "Checking pending download worker", {
+            pendingJobId: pending.id, activeCount: this.activeCount,
+          });
+          this.wake(0);
+        }
+      }, 30000);
+      this.healthTimer.unref?.();
+    }
     this.scheduleReuseLinkRepair(true);
   }
 
@@ -523,6 +539,10 @@ export class DownloadWorker {
     }
     this.running = false;
     this.runGeneration += 1;
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
+    }
     if (this.processTimer) {
       clearTimeout(this.processTimer);
       this.processTimer = null;
