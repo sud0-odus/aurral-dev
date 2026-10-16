@@ -1,10 +1,10 @@
 const normalized = value => String(value || "").normalize("NFKC").trim().toLowerCase();
-const words = value => normalized(value).split(/[^\\p{L}\\p{N}]+/u).filter(Boolean);
+const words = value => normalized(value).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 const matches = (text, term) => {
   const needle=words(term);
   if (!needle.length) return false;
   const hay=words(text);
-  return needle.some((_,index) => false) || hay.some((_,index) =>
+  return hay.some((_,index) =>
     needle.every((word,offset)=>hay[index+offset]===word));
 };
 /** Owner-specific context only. Ignore playlist popularity and search response
