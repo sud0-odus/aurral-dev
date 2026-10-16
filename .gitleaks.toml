@@ -4,12 +4,11 @@ title = "Aurral Gitleaks history audit: verified false positives"
 useDefault = true
 
 # Each exception requires BOTH the specific path and the known harmless
-# matching text, and applies only to the corresponding detection rule.
+# matching text, and only the inspected harmless strings.
 # Do not ignore entire files, commits, or generic-api-key globally.
 
 [[allowlists]]
 description = "MusicBrainz recording IDs in track-matching acceptance fixture"
-targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "match"
 paths = ['''^\.tests/track-matching/fixtures/acceptance\.jsonl$''']
@@ -17,7 +16,6 @@ regexes = ['''recording-[0-9]+''']
 
 [[allowlists]]
 description = "MusicBrainz recording IDs in track-matching development fixture"
-targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "match"
 paths = ['''^\.tests/track-matching/fixtures/development\.jsonl$''']
@@ -25,7 +23,6 @@ regexes = ['''recording-[0-9]+''']
 
 [[allowlists]]
 description = "Frontend player keyboard-shortcut label"
-targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "match"
 paths = ['''^frontend/src/hooks/usePlayerShortcuts\.js$''']
@@ -33,7 +30,6 @@ regexes = ['''Shift\+ArrowLeft''']
 
 [[allowlists]]
 description = "API docs example header containing literal YOUR_API_KEY placeholder"
-targetRules = ["curl-auth-header"]
 condition = "AND"
 regexTarget = "line"
 paths = ['''^docs/src/content/docs/api/overview\.mdx$''']
@@ -41,7 +37,6 @@ regexes = ['''X-Api-Key:\s*YOUR_API_KEY''']
 
 [[allowlists]]
 description = "Phase 2 testing docs example Basic auth literal placeholder"
-targetRules = ["curl-auth-user"]
 condition = "AND"
 regexTarget = "line"
 paths = ['''^PHASE2_TESTING\.md$''']
