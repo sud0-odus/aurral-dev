@@ -7,6 +7,8 @@ const [state, { db }, { downloadTracker }, { inspectOrphanedDownloadJobs }] = aw
   "backend/services/downloadJobs/downloadWatchdog.js",
 );
 test.after(() => cleanupIsolatedState(state));
+// Watchdog runs after Honker has attached its queue tables in the application.
+db.exec("CREATE TABLE IF NOT EXISTS _honker_live (queue TEXT, payload TEXT)");
 
 test("never calls a queued or active pipeline an orphan", () => {
   const id = downloadTracker.addJob({artistName:"Band",trackName:"Song"}, "library");
