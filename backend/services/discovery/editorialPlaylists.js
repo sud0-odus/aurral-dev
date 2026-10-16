@@ -54,7 +54,13 @@ const uniqueTerms = (values) => {
 
 async function getForYouPlaylists(userId) {
   const { body } = await getUserDiscovery(userId, 0, 0);
-  const terms = uniqueTerms([...(body.topGenres || []), ...(body.topTags || [])]);
+  // Prefer the owner's listening-history/Apple/import artists, then personal
+  // genres. The same globally popular genre no longer dominates every user.
+  const terms = uniqueTerms([
+    ...(body.basedOn || []).slice(0, 3).map(seed => seed.name || seed.artistName),
+    ...(body.topGenres || []),
+    ...(body.topTags || []),
+  ]);
   const results = await Promise.allSettled(terms.map(searchEditorialPlaylists));
   const seen = new Set();
   const playlists = [];
@@ -65,7 +71,16 @@ async function getForYouPlaylists(userId) {
       playlists.push(playlist);
     }
   }
-  return playlists.slice(0, FOR_YOU_LIMIT);
+  const artistTerms = (body.basedOn || []).slice(0, 3)
+    .map(seed => String(seed.name || seed.artistName || "").trim().toLowerCase())
+    .filter(Boolean);
+  return playlists.map((playlist, index) => {
+    const description = `${playlist.name || ""} ${playlist.description || ""}`.toLowerCase();
+    const matchedArtists = artistTerms.filter(term => description.includes(term)).length;
+    return { playlist, score: matchedArtists * 100 - index };
+  }).sort((a, b) => b.score - a.score)
+    .slice(0, FOR_YOU_LIMIT)
+    .map(({ playlist }) => playlist);
 }
 
 export async function getEditorialShelf(user) {
