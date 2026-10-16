@@ -417,6 +417,17 @@ function QueueTable({ queue = [], loading = false }) {
 
 export function SettingsTasksTab({ showError, showSuccess }) {
   const [clearing, setClearing] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyProvider, setHistoryProvider] = useState("");
+  const [historyCursor, setHistoryCursor] = useState(null);
+  const eventHistory = useQuery({
+    queryKey: ["download-event-history", historySearch, historyProvider, historyCursor],
+    queryFn: ({ signal }) => getData("/playlists/operations/events", {
+      signal, params: { search: historySearch, provider: historyProvider,
+        before: historyCursor, limit: 75 },
+    }),
+    refetchInterval: 15000,
+  });
   const diagnostics = useQuery({ queryKey: ["download-operations-diagnostics"],
     queryFn: ({ signal }) => getData("/playlists/operations/diagnostics", { signal }),
     staleTime: 0, refetchInterval: 15000 });
@@ -519,16 +530,39 @@ export function SettingsTasksTab({ showError, showSuccess }) {
             ))}</tbody>
           </table>
         </div>
+        <div className="arr-form-row">
+          <label htmlFor="download-history-search">Search history</label>
+          <input id="download-history-search" value={historySearch} placeholder="Job ID, event, error…"
+            onChange={(event) => { setHistorySearch(event.target.value); setHistoryCursor(null); }} />
+          <label htmlFor="download-history-provider">Provider</label>
+          <select id="download-history-provider" value={historyProvider}
+            onChange={(event) => { setHistoryProvider(event.target.value); setHistoryCursor(null); }}>
+            <option value="">All providers</option>
+            {["slskd","dmm","ytdlp","deemix","sabnzbd","nzbget","usenet"].map(provider => (
+              <option key={provider} value={provider}>{provider}</option>
+            ))}
+          </select>
+        </div>
+        {eventHistory.error ? <p role="alert">Could not load download event history.</p> : null}
         <div className="arr-table-wrap">
           <table className="arr-table">
-            <thead><tr><th>When</th><th>Job</th><th>Event</th><th>Provider</th><th>Details</th></tr></thead>
-            <tbody>{(diagnostics.data?.recentEvents || []).slice(0,65).map(entry => (
+            <thead><tr><th>When</th><th>Job / attempt</th><th>Event</th><th>Provider</th><th>Reason</th><th>Details</th></tr></thead>
+            <tbody>{(eventHistory.data?.events || []).map(entry => (
               <tr key={entry.id}><td>{new Date(entry.occurredAt).toLocaleString()}</td>
-                <td>{entry.jobId?.slice(0,8)||"—"}</td>
-                <td>{entry.event}</td><td>{entry.provider||"—"}</td>
-                <td>{entry.detail||"—"}</td></tr>
+                <td>{entry.jobId?.slice(0,8) || "—"}{entry.attemptId ? " / " + entry.attemptId.slice(0,8) : ""}</td>
+                <td>{entry.event}</td><td>{entry.provider || "—"}</td>
+                <td>{entry.reasonCode || "—"}</td><td>{entry.detail || "—"}</td></tr>
             ))}</tbody>
           </table>
+        </div>
+        <div className="arr-form-actions">
+          <button type="button" className="arr-btn arr-btn--ghost"
+            disabled={!eventHistory.data?.hasMore || eventHistory.isFetching}
+            onClick={() => setHistoryCursor(eventHistory.data.nextBefore)}>
+            Older events
+          </button>
+          {historyCursor != null ? <button type="button" className="arr-btn arr-btn--ghost"
+            onClick={() => setHistoryCursor(null)}>Newest events</button> : null}
         </div>
         <p className="arr-form-help">Pipeline: {Object.entries(diagnostics.data?.pipeline || {}).map(([name, total]) => `${name}: ${total}`).join(" · ") || "No queued pipeline work"}.
           Potentially slow jobs: {diagnostics.data?.stalledCandidates?.length ?? 0}. These are not automatically cancelled.</p>
