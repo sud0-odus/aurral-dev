@@ -24,6 +24,7 @@ import { recordAlbumGrabQueued, recordAlbumTrackState } from "../albumGrabActivi
 import {
   cancelDownloadJob,
   beginDownloadAttempt,
+  getActiveDownloadAttemptId,
   setActiveDownloadAttemptId,
   cancelDownloadJobs,
   getPlaylistDownloadGeneration,
