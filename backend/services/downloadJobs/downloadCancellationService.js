@@ -7,6 +7,7 @@ import { logger } from "../logger.js";
 import { downloadTracker } from "./downloadTracker.js";
 import { dbOps } from "../../db/helpers/index.js";
 import { db } from "../../config/db-sqlite.js";
+import { revokePipelineProviderJob } from "./providerSchedulerRuntime.js";
 import {
   cancelDownloadJobs,
   cancelPlaylistDownloadGeneration,
@@ -370,6 +371,7 @@ export function markDownloadWorkCancelledForJobs(jobs = []) {
       captureCancellationWork(`downloadCancellationWork:${job.id}`, [job], rows.filter((row) => row.payload?.jobId === job.id).map((row) => row.payload));
     }
     cancelDownloadJobs(normalizedJobs.map((job) => job.id));
+    for (const job of normalizedJobs) revokePipelineProviderJob(job.id);
   })();
   return normalizedJobs;
 }
@@ -392,6 +394,7 @@ export function markPlaylistDownloadWorkCancelled(playlistId, jobs = []) {
     .map((job) => job.id);
   const generation = cancelPlaylistDownloadGeneration(safePlaylistId);
   cancelDownloadJobs(normalizedJobs.map((job) => job.id));
+  for (const job of normalizedJobs) revokePipelineProviderJob(job.id);
   return { generation, jobs: normalizedJobs, wasActive, jobsToRestore };
 }
 

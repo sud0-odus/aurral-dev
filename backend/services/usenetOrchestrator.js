@@ -358,8 +358,8 @@ async function handleUsenetDownload(payload, helpers) {
     .then(({ recordTrackJobDownloading }) => recordTrackJobDownloading(job))
     .catch((err) => { console.warn(err); });
 
-  const client = getUsenetClient(payload.manualDownloadClient);
-  const clientKey = getUsenetClientKey(payload.manualDownloadClient);
+  const client = getUsenetClient(payload.downloadClient || payload.manualDownloadClient);
+  const clientKey = getUsenetClientKey(payload.downloadClient || payload.manualDownloadClient);
   let submission;
   try {
     const nzb = await prowlarrClient.downloadNzb(release.downloadUrl);

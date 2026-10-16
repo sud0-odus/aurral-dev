@@ -20,6 +20,7 @@ import { blockPipelineJobForReview, SEARCH_RESET } from "./pipelineHelpers.js";
 import { isPipelinePayloadActive } from "./downloadJobs/downloadCancellation.js";
 import { deferForInactiveOwner } from "./downloadJobs/playlistOwnerStatus.js";
 import { discardReviewFile } from "./downloadJobs/reviewFiles.js";
+import { providerSchedulerEnabled, releasePipelineProvider } from "./downloadJobs/providerSchedulerRuntime.js";
 
 // Runs one step of a download job: it picks the next enabled source in
 // priority order and hands the step to that source's adapter. Every source
@@ -177,6 +178,11 @@ async function failOrTryNextSource(payload, job, message, logDetails = {}) {
       ...logDetails,
     });
     downloadTracker.clearSlskdDispatched(job.id);
+    if (providerSchedulerEnabled()) {
+      releasePipelineProvider(payload);
+      return { ...nextPayload, providerId: null, downloadClient: null,
+        triedProviders: [...new Set([...(payload.triedProviders || []), payload.providerId].filter(Boolean))] };
+    }
     return nextPayload;
   }
   if (payload?.albumGrab === true) {

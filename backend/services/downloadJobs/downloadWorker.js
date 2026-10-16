@@ -22,6 +22,7 @@ import {
   resolveDownloadRoot,
 } from "../downloadPaths.js";
 import { startDownloadPipelineWorker } from "../downloadPipelineWorker.js";
+import { providerSchedulerEnabled, providerSchedulerMaxWorkers } from "./providerSchedulerRuntime.js";
 import { configuredLidarrFolders, isLidarrLibraryActive } from "../libraryFolders.js";
 import { listHonkerJobs, withHonkerLock } from "../honkerDb.js";
 import { isPlaylistOwnerActive } from "./playlistOwnerStatus.js";
@@ -446,9 +447,10 @@ export class DownloadWorker {
 
     this.processLoop = () => {
       if (!this.running) return;
-      const { concurrency } = this.getWorkerSettings();
+      const { concurrency: legacyConcurrency } = this.getWorkerSettings();
+      const concurrency = providerSchedulerEnabled() ? providerSchedulerMaxWorkers() : legacyConcurrency;
       while (this.activeCount < concurrency) {
-        if (this.activeCount + countSearchingPipelineJobs() >= concurrency) {
+        if (!providerSchedulerEnabled() && this.activeCount + countSearchingPipelineJobs() >= concurrency) {
           this._scheduleProcessIn(SEARCH_SLOT_RECHECK_MS);
           break;
         }
