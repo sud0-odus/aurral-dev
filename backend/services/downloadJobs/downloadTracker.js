@@ -19,6 +19,7 @@ import {
 } from "../downloadPaths.js";
 import { flowPlaylistConfig } from "../playlists/flowPlaylistConfig.js";
 import { logger } from "../logger.js";
+import { recordDownloadEvent } from "./downloadEventHistory.js";
 import { recordAlbumGrabQueued, recordAlbumTrackState } from "../albumGrabActivity.js";
 import {
   cancelDownloadJob,
@@ -807,10 +808,12 @@ export class DownloadTracker {
       job.upgradeForJobId ?? null,
       job.manualReplacementSearch ? 1 : 0,
     );
+    recordDownloadEvent({jobId:job.id,event:"queued",provider:job.downloadSource});
     this._touchRevision();
   }
 
   _update(job) {
+    const previous = db.prepare("SELECT status,error,download_source FROM playlist_download_jobs WHERE id=?").get(job.id);
     updateStmt.run(
       job.status,
       job.stagingPath ?? null,
@@ -842,6 +845,11 @@ export class DownloadTracker {
       job.manualReplacementSearch ? 1 : 0,
       job.id,
     );
+    if(previous && (previous.status!==job.status || previous.error!==(job.error??null))){
+      recordDownloadEvent({jobId:job.id,
+        event:previous.status===job.status?"reason_updated":job.status,
+        provider:job.downloadSource||previous.download_source,detail:job.error||null});
+    }
     recordAlbumTrackState(job);
     this._touchRevision();
   }

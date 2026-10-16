@@ -519,6 +519,17 @@ export function SettingsTasksTab({ showError, showSuccess }) {
             ))}</tbody>
           </table>
         </div>
+        <div className="arr-table-wrap">
+          <table className="arr-table">
+            <thead><tr><th>When</th><th>Job</th><th>Event</th><th>Provider</th><th>Details</th></tr></thead>
+            <tbody>{(diagnostics.data?.recentEvents || []).slice(0,65).map(entry => (
+              <tr key={entry.id}><td>{new Date(entry.occurredAt).toLocaleString()}</td>
+                <td title={entry.jobId||""}>{entry.jobId?.slice(0,8)||"—"}</td>
+                <td>{entry.event}</td><td>{entry.provider||"—"}</td>
+                <td>{entry.detail||"—"}</td></tr>
+            ))}</tbody>
+          </table>
+        </div>
         <p className="arr-form-help">Pipeline: {Object.entries(diagnostics.data?.pipeline || {}).map(([name, total]) => `${name}: ${total}`).join(" · ") || "No queued pipeline work"}.
           Potentially slow jobs: {diagnostics.data?.stalledCandidates?.length ?? 0}. These are not automatically cancelled.</p>
         <div className="arr-table-wrap">

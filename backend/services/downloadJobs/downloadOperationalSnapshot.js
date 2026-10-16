@@ -1,6 +1,7 @@
 import { db } from "../../config/db-sqlite.js";
 import { getProviderSchedulerStats } from "./providerSchedulerRuntime.js";
 import { downloadTracker } from "./downloadTracker.js";
+import { getDownloadEvents } from "./downloadEventHistory.js";
 const MAX_AGE_MS = 30 * 60 * 1000;
 export function getDownloadOperationalSnapshot(now = Date.now()) {
   const stats = downloadTracker.getStats();
@@ -29,6 +30,7 @@ export function getDownloadOperationalSnapshot(now = Date.now()) {
     pipeline: Object.fromEntries(pipeline.map(row => [row.state, row.total])),
     providers: getProviderSchedulerStats(),
     staleReservations: staleReservations.length,
+    recentEvents: getDownloadEvents({limit:120}),
     recentJobs: recent.map(row => ({ id: row.id, artist: row.artist_name, track: row.track_name,
       status: row.status, provider: row.download_source, error: row.error,
       startedAt: row.started_at, completedAt: row.completed_at, createdAt: row.created_at })),
