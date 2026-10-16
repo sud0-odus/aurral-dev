@@ -50,6 +50,7 @@ import { buildRecommendationsFromSeeds } from "./recommendations.js";
 import { getTopPlayedArtists } from "../playEventService.js";
 import { scrobbleConnectionStore } from "../scrobbleConnectionStore.js";
 import { getAppleMusicPlaylistSeeds, PERSONAL_TASTE_PROFILE_VERSION } from "./applePlaylistTaste.js";
+import { getPersonalHistoryProfiles, mergePersonalArtistSources } from "./personalTasteSources.js";
 
 const USER_REFRESH_STAGGER_SECONDS = 15;
 const GLOBAL_REFRESH_RETRY_SECONDS = 60;
@@ -349,18 +350,7 @@ const feedbackArtists = (feedback, action) =>
 const collectUserSeeds = async (user, feedback) => {
   // Combine the signed-in user's own provider profiles; never take history from
   // the server owner or from another person's music library.
-  const profiles = [getListenHistoryProfile(user)];
-  const linked = scrobbleConnectionStore.getConnections(user.id);
-  for (const provider of ["lastfm", "listenbrainz"]) {
-    const name = linked[provider]?.displayName;
-    if (name) profiles.push(getListenHistoryProfile({
-      listenHistoryProvider: provider, listenHistoryUsername: name,
-    }));
-  }
-  const unique = [...new Map(profiles.filter(hasListenHistoryProfile).map(profile => [
-    `${profile.listenHistoryProvider}:${String(profile.listenHistoryUsername || profile.listenHistoryUrl || "").toLowerCase()}`,
-    profile,
-  ])).values()];
+  const unique = getPersonalHistoryProfiles(user, scrobbleConnectionStore.getConnections(user.id));
   const groups = await Promise.all(unique.map(async profile => {
     try {
       const artists = await fetchListenHistoryArtists(profile, getLastfmDiscoveryPeriod());
@@ -372,13 +362,14 @@ const collectUserSeeds = async (user, feedback) => {
       return [];
     }
   }));
-  const externalHistory = groups.reduce((combined, group) => interleaveLists(combined, group), []);
   const localHistory = getTopPlayedArtists(user.id, { limit: 50 }).map((artist) => ({
     ...artist,
     source: "local",
   }));
   const appleMusic = getAppleMusicPlaylistSeeds(dbOps.getSettings().sharedPlaylists, user.id);
-  const personalHistory = interleaveLists(interleaveLists(externalHistory, localHistory), appleMusic);
+  const personalHistory = mergePersonalArtistSources([
+    ...groups, localHistory, appleMusic,
+  ]);
   return selectDiscoverySeeds({
     likedArtists: feedbackArtists(feedback, "more_like_this"),
     historyArtists: personalHistory,

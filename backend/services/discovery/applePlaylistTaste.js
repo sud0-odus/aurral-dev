@@ -1,4 +1,4 @@
-export const PERSONAL_TASTE_PROFILE_VERSION = "apple-imports-personal-v2-multi-history";
+export const PERSONAL_TASTE_PROFILE_VERSION = "apple-imports-personal-v3-multi-source";
 export function getAppleMusicPlaylistSeeds(playlists, userId, { limit = 100 } = {}) {
   const ownerId = Number(userId);
   if (!Number.isSafeInteger(ownerId) || ownerId < 1) return [];
@@ -24,7 +24,7 @@ export function getAppleMusicPlaylistSeeds(playlists, userId, { limit = 100 } = 
       while(positions[i]<pools[i].length){
         const a=pools[i][positions[i]++], key=a.artistName.normalize("NFKC").toLowerCase();
         if(seen.has(key))continue;
-        seen.add(key);seeds.push({artistName:a.artistName,source:"apple_music",playcount:0,profileBucket:"apple_playlist"});advanced=true;break;
+        seen.add(key);seeds.push({artistName:a.artistName,source:"apple_music",playcount:Math.min(30,a.count),profileBucket:"apple_playlist"});advanced=true;break;
       }
     }
     if(!advanced)break;
