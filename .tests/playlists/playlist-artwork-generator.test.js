@@ -45,7 +45,7 @@ test("photo source failures preserve existing playlist artwork", async (t) => {
       paletteSeed: "test",
       imageUrls: ["https://e-cdns-images.dzcdn.net/images/cover/test/250x250.jpg"],
     }),
-    /503/,
+    /No usable album artwork/,
   );
   assert.deepEqual(await fs.readFile(existingPath), existing);
   await assert.rejects(fs.access(outputPath));
