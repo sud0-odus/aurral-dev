@@ -130,6 +130,9 @@ const SETTINGS_SEARCH_METADATA = {
       deemix: "Deezer download client",
     },
     fields: {
+      "Download concurrency": "worker scheduler total concurrent jobs",
+      "Simultaneous Aurral jobs": "download worker concurrency maximum simultaneous tracks",
+      "Provider capacity (scheduler test mode)": "per-provider simultaneous jobs capacity scheduling",
       "Quality profile": "default acceptable allowed formats rank preference cutoff upgrades",
       Qualities: "FLAC MP3 M4A 128 192 256 320 bitrate hi-res standard allowed cutoff drag rank",
       "Automatic upgrades": "upgrade searches Flow Static tracks",

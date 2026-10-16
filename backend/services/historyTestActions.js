@@ -67,7 +67,7 @@ async function importedPaths(jobs, removeImported) {
 export async function performHistoryTestAction(id, action, {removeImported=false}={}) {
   if (!['cancel','reset-retry','force-clear'].includes(action)) throw Object.assign(new Error('Unknown action'),{statusCode:400});
   if (typeof removeImported !== 'boolean') throw Object.assign(new Error('removeImported must be boolean'),{statusCode:400});
-  const chosen=selection(id);
+  selection(id);
   const result = await withPlaylistMutationLock('library', async () => {
     const {jobs,albumId,requestId}=selection(id);
     if (requestId) {

@@ -18,7 +18,6 @@ import {
   EXISTING_FILE_MODE_OPTIONS,
   LIBRARY_JOB_TYPE,
   canAccessJobType,
-  canAccessPlaylistType,
   filterJobsForUser,
   pauseStaticPlaylistRetryCycle,
   getAccessibleStaticPlaylist,
