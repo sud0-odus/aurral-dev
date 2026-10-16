@@ -17,6 +17,7 @@ import {
 } from "../services/googleAuth.js";
 import { startPlexLogin, completePlexLogin } from "../services/plexLoginAuth.js";
 import { logger } from "../services/logger.js";
+import { recordDownloadEvent } from "../services/downloadJobs/downloadEventHistory.js";
 
 const router = express.Router();
 
@@ -37,9 +38,11 @@ router.post("/login", async (req, res) => {
     }
     const user = userOps.getUserByUsername(username);
     if (!user || !verifyPassword(password, user.passwordHash)) {
+      recordDownloadEvent({ category:"auth", event:"login_rejected", detail:"Invalid credentials" });
       return res.status(401).json({ error: "Invalid username or password" });
     }
     if (user.status !== "active") {
+      recordDownloadEvent({ category:"auth", event:"login_rejected", detail:"Account disabled" });
       return res.status(403).json({ error: "This account has been suspended or disabled" });
     }
     const updates = { subsonicPassword: password };
@@ -62,6 +65,7 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (error) {
+    logger.error("auth","Local login failed",{reason:error?.message||String(error)});
     res.status(500).json({ error: "Login failed" });
   }
 });
@@ -112,6 +116,7 @@ router.post("/reauth", requireAuth, (req, res) => {
   }
   const { currentPassword } = req.body || {};
   if (!verifyPassword(currentPassword || "", user.passwordHash)) {
+    recordDownloadEvent({ category:"auth", event:"reauth_rejected", detail:"Invalid current password" });
     return res.status(400).json({ error: "Current password is incorrect" });
   }
   touchReauth(token);
