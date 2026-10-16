@@ -112,8 +112,8 @@ function PlaylistDetail({ playlist, stats, staticPlaylists, fetchStatus }) {
   // PHASE8E9_SHARE_SUMMARY: show recipients only to owner/admin.
   const [sharedWith, setSharedWith] = useState([]);
   const canManageSharingSummary = user?.role === "admin" ||
-  const viewerUsersKey = (playlist.viewerUserIds || []).join(",");
     (playlist.ownerUserId != null && Number(playlist.ownerUserId) === Number(user?.id));
+  const viewerUsersKey = (playlist.viewerUserIds || []).join(",");
   useEffect(() => {
     let cancelled = false;
     setSharedWith([]);
