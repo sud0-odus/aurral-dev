@@ -76,12 +76,20 @@ export async function isGeneratedPlaylistArtworkFallback(filePath, { title, kind
     const metadata = await sharp(filePath).metadata();
     if (metadata.width !== 1000 || metadata.height !== 1000) return false;
     const existing = await fs.readFile(filePath);
-    const fallback = await buildPlaylistArtworkWebpBuffer({ playlistName: title, kind, artistNames });
-    if (path.extname(filePath).toLowerCase() === ".webp") {
-      return existing.equals(fallback);
+    const variants = [
+      await buildPlaylistArtworkWebpBuffer({ playlistName: title, kind, artistNames }),
+    ];
+    if (artistNames.length) {
+      variants.push(await buildPlaylistArtworkWebpBuffer({ playlistName: title, kind }));
     }
-    const jpeg = await sharp(fallback).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
-    return existing.equals(jpeg);
+    if (path.extname(filePath).toLowerCase() === ".webp") {
+      return variants.some(fallback => existing.equals(fallback));
+    }
+    for (const fallback of variants) {
+      const jpeg = await sharp(fallback).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+      if (existing.equals(jpeg)) return true;
+    }
+    return false;
   } catch {
     return false;
   }
