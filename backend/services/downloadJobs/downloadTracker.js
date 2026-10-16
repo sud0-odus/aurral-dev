@@ -19,7 +19,7 @@ import {
 } from "../downloadPaths.js";
 import { flowPlaylistConfig } from "../playlists/flowPlaylistConfig.js";
 import { logger } from "../logger.js";
-import { recordDownloadEvent } from "./downloadEventHistory.js";
+import { classifyDownloadFailure, recordDownloadEvent } from "./downloadEventHistory.js";
 import { recordAlbumGrabQueued, recordAlbumTrackState } from "../albumGrabActivity.js";
 import {
   cancelDownloadJob,
@@ -848,7 +848,9 @@ export class DownloadTracker {
     if(previous && (previous.status!==job.status || previous.error!==(job.error??null))){
       recordDownloadEvent({jobId:job.id,
         event:previous.status===job.status?"reason_updated":job.status,
-        provider:job.downloadSource||previous.download_source,detail:job.error||null});
+        provider:job.downloadSource||previous.download_source,detail:job.error||null,
+        attemptId:getActiveDownloadAttemptId(job.id),
+        reasonCode:job.error?classifyDownloadFailure(job.error):null});
     }
     recordAlbumTrackState(job);
     this._touchRevision();
