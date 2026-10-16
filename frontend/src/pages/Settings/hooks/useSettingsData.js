@@ -408,6 +408,26 @@ export function useSettingsData(showSuccess, showError, showInfo, activeTab) {
     fetchSettings();
   }, [fetchSettings]);
 
+  // Provider settings can also be updated by CLI/another Aurral session.
+  // Refresh when returning to this tab, rather than leaving stale priorities
+  // in the form (which could overwrite a newer value on the next autosave).
+  // Never discard an unsaved local edit or an in-flight save.
+  useEffect(() => {
+    if (activeTab !== "download-clients" || !settingsLoaded) return;
+    const refreshIfSafe = () => {
+      if (document.visibilityState !== "visible") return;
+      if (hasUnsavedChangesRef.current || saveInFlightRef.current || saveTimerRef.current) return;
+      void fetchSettings();
+    };
+    refreshIfSafe();
+    window.addEventListener("focus", refreshIfSafe);
+    document.addEventListener("visibilitychange", refreshIfSafe);
+    return () => {
+      window.removeEventListener("focus", refreshIfSafe);
+      document.removeEventListener("visibilitychange", refreshIfSafe);
+    };
+  }, [activeTab, settingsLoaded, fetchSettings]);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
