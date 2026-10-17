@@ -450,6 +450,8 @@ export class DownloadWorker {
 
     this.processLoop = () => {
       if (!this.running) return;
+      // CT119: pause new acquisition dispatch without deleting pending jobs.
+      if (process.env.AURRAL_CT119_PAUSE_ACQUISITION === "1") return;
       const { concurrency: legacyConcurrency } = this.getWorkerSettings();
       const concurrency = providerSchedulerEnabled() ? providerSchedulerMaxWorkers() : legacyConcurrency;
       while (this.activeCount < concurrency) {

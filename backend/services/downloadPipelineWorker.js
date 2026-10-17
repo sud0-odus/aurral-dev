@@ -67,8 +67,9 @@ const pipelineConsumers = Array.from({ length: 16 }, (_, index) => createHonkerW
   getQueue: getPipelineQueue,
   idlePollS: 2,
   retryDelayS: 30,
-  shouldRestart: () => isAnyDownloadSourceConfigured(),
+  shouldRestart: () => process.env.AURRAL_CT119_PAUSE_ACQUISITION !== "1" && isAnyDownloadSourceConfigured(),
   onStart() {
+    if (process.env.AURRAL_CT119_PAUSE_ACQUISITION === "1") return false;
     if (!isAnyDownloadSourceConfigured()) return false;
     if (providerSchedulerEnabled()) {
       if (index >= providerSchedulerMaxWorkers()) return false;

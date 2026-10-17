@@ -323,7 +323,17 @@ export async function scanMusicRoot({
       : null;
   const reconcilePaths = changed?.reconcilePaths || null;
   const result = { filesSeen: 0, filesIndexed: 0, filesFailed: 0 };
-  const unseenPaths = requestedFiles ? null : getAvailableLibraryMediaPaths(source);
+  // Only reconcile availability inside the root being scanned.
+  // Other roots using this source may be mounted read-only.
+  const unseenPaths = requestedFiles ? null : new Set(
+    [...getAvailableLibraryMediaPaths(source)].filter((filePath) => {
+      const relative = path.relative(resolvedRoot, filePath);
+      return relative === "" ||
+        (relative !== ".." &&
+         !relative.startsWith(`..${path.sep}`) &&
+         !path.isAbsolute(relative));
+    }),
+  );
   const legacyKeyed = findLegacyKeyedLibraryFiles(source);
   const legacyMoves = [];
   const seenPaths = new Set();

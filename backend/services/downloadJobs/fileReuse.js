@@ -744,6 +744,9 @@ export function requeueJobsUsingLidarrFiles({ downloadRoot = resolveDownloadRoot
     const inLidarrRoot = lidarrRoots.some((lidarrRoot) =>
       finalPath === path.resolve(lidarrRoot) || isPathInsideRoot(finalPath, path.resolve(lidarrRoot)));
     if (!job.externalPath && !inLidarrRoot) continue;
+    // Keep valid external reference files when Lidarr is disabled.
+    // Only requeue files actually owned by Lidarr or missing from disk.
+    if (!inLidarrRoot && fs.existsSync(finalPath)) continue;
     if (downloadTracker.setPending(job.id, "Lidarr was turned off")) requeued += 1;
   }
   return requeued;
