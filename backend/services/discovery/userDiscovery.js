@@ -5,6 +5,7 @@ import { getBlockedArtistKeys, getDiscoveryFeedback } from "./feedback.js";
 import { getDiscoveryCache, getDiscoveryRefreshState } from "./persistence.js";
 import { getUserDiscoveryNamespace, requestUserDiscoveryRefresh } from "./provider.js";
 import { serveRecommendations, withArtistRouteId } from "./recommendationPipeline.js";
+import { PERSONAL_TASTE_PROFILE_VERSION } from "./applePlaylistTaste.js";
 import { getLibraryArtistKeys, matchesArtistKeys } from "./artistKeys.js";
 
 const FAILED_REFRESH_BACKOFF_MS = 15 * 60 * 1000;
@@ -35,7 +36,8 @@ const ensureUserRefresh = (userId, userCache) => {
   const lastUpdatedMs = Date.parse(userCache.lastUpdated || "") || 0;
   const staleMs = getDiscoveryAutoRefreshHours() * 60 * 60 * 1000;
   const finishedAt = Number(userCache.metadata?.refreshFinishedAt) || 0;
-  const needsRefresh = !lastUpdatedMs || Date.now() - lastUpdatedMs > staleMs;
+  const needsRefresh = userCache.metadata?.tasteProfileVersion !== PERSONAL_TASTE_PROFILE_VERSION ||
+    !lastUpdatedMs || Date.now() - lastUpdatedMs > staleMs;
   if (!needsRefresh || Date.now() - finishedAt < FAILED_REFRESH_BACKOFF_MS) return;
   requestUserDiscoveryRefresh(userId, {
     reason: lastUpdatedMs ? "stale" : "missing",

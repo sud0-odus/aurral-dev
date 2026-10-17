@@ -340,6 +340,7 @@ export const normalizePlaylistTrack = (track) => {
     durationMs,
     ...(sourceVideoId ? { sourceVideoId } : {}),
     artistAliases,
+    ...(track.artworkUrl ? { artworkUrl: String(track.artworkUrl).slice(0, 2048) } : {}),
     reason: reason || null,
     ...(canonicalJobId ? { canonicalJobId } : {}),
     ...(membershipId ? { membershipId } : {}),

@@ -59,7 +59,6 @@ export function registerAppleMusicPoc(router) {
       if (apple.length > 3000 || selectedIndexes.some(i => i >= apple.length)) return res.status(409).json({ error: "Apple playlist changed. Scan again." });
       const norm = v => String(v || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
       const core = t => `${norm(t?.artistName || t?.artist)}\u0001${norm(t?.trackName || t?.title)}`;
-      const album = t => norm(t?.albumName || t?.album);
       const existing = Array.isArray(current.tracks) ? current.tracks : [];
       const chosen = [];
       const seen = new Set();

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { dmmToken, dmmStagingRoot } from './dmmSettings.js';
 import { logger } from './logger.js';
 import { searchDmmAlbums, getDmmAlbum } from './dmmClient.js';
+import { discoverDmmTrack } from './dmmSearch.js';
 import { downloadTracker } from './downloadJobs/downloadTracker.js';
 import { buildResolvedJobTrack as buildResolvedTrack, commitDownloadedFile, joinUnderRoot, buildTrackFileName, writeAudioMetadata } from './downloadUtils.js';
 import { resolveDownloadRoot } from './downloadPaths.js';
@@ -15,6 +16,28 @@ const RD = 'https://api.real-debrid.com/rest/1.0';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const norm = s => String(s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\([^)]*\)/g,' ').replace(/\[[^\]]*\]/g,' ').replace(/^[0-9]{1,3}\s*[-._)]\s*/, '').replace(/\.(flac|mp3|m4a|aac|ogg|opus|wav|wma)$/i,'').replace(/[^a-z0-9]+/g,' ').trim();
 const token = () => dmmToken();
+// DMM artist+album search sometimes returns no matches even when the album
+// exists under an artist-only query. Preserve strict exact album selection.
+async function findDmmEditions(artist, albumName, limit = 48) {
+  const artistKey = norm(artist);
+  const albumKey = norm(albumName);
+  const exactEditions = albums => (Array.isArray(albums) ? albums : []).filter(item =>
+    norm(item.artist) === artistKey && (!albumKey || norm(item.album) === albumKey)
+  );
+  const query = `${artist} ${albumName || ''}`.trim();
+  const result = await searchDmmAlbums(query, limit);
+  let editions = exactEditions(result.albums);
+  if (editions.length || !albumKey) return editions;
+  const fallback = await searchDmmAlbums(artist, limit);
+  editions = exactEditions(fallback.albums);
+  if (editions.length) {
+    logger.info('dmm', 'Recovered exact album match using artist-only catalog search', {
+      artist, album: albumName, editionCount: editions.length
+    });
+  }
+  return editions;
+}
+
 async function rd(pathname, { method = 'GET', data } = {}) {
   const headers = { Authorization: `Bearer ${token()}` };
   if (data) headers['Content-Type'] = 'application/x-www-form-urlencoded';
@@ -208,27 +231,16 @@ async function acquire({ hash, fileId, jobId, payload }) {
     if (id && !preserveFailedTorrent) await rd(`/torrents/delete/${encodeURIComponent(id)}`, { method:'DELETE' }).catch(() => {});
   }
 }
-function matchTrack(album, requested) {
-  const target = norm(requested.title || requested.trackName || requested.name);
-  return (album.tracks || []).find(t => norm(t.filename) === target) || null;
-}
 async function search(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   const request = buildResolvedTrack(job, payload.track);
-  const artist = request.artistName || job.artistName;
-  const albumName = request.albumName || job.albumName;
-  const albums = payload.dmmHash
-    ? [await getDmmAlbum(payload.dmmHash)]
-    : (await searchDmmAlbums(`${artist} ${albumName || ''}`.trim(), 48)).albums
-      .filter(a => norm(a.artist) === norm(artist) && (!albumName || norm(a.album) === norm(albumName)));
-  const matches = [];
-  for (const item of albums.slice(0,5)) {
-    const album = await getDmmAlbum(item.hash);
-    const track = matchTrack(album, { title: request.title || request.trackName || job.trackName });
-    if (track) matches.push({hash:album.hash, fileId:track.fileId, filename:track.filename, albumName:album.album, link:track.link || null, expectedBytes:track.bytes || null});
-  }
-  if (!matches.length) return helpers.failOrTryNextSource(payload, job, 'No exact DMM album/track match');
+  const { matches, stats } = await discoverDmmTrack({ request, hash: payload.dmmHash });
+  logger.info('dmm', 'Provider-specific catalog search summary', {
+    jobId: job.id, ...stats,
+  });
+  if (!matches.length) return helpers.failOrTryNextSource(
+    payload, job, `No matching DMM recording (${stats.reason})`);
   logger.info('dmm','Matched music catalog candidate',{jobId:job.id,candidateCount:matches.length});
   return {...payload, source:'dmm', phase:'download', dmmCandidates:matches, dmmCandidateIndex:0};
 }
@@ -312,8 +324,7 @@ async function processDmmAlbumGrab(payload, helpers) {
   if (payload.phase === 'search') {
     const jobs = albumGrabJobs(payload);
     if (jobs.length < 2) return helpers.failOrTryNextSource(payload, leader, 'Album grab no longer has pending members');
-    const results = (await searchDmmAlbums(`${leader.artistName} ${leader.albumName}`, 48)).albums || [];
-    const editions = results.filter(item => norm(item.artist) === norm(leader.artistName) && norm(item.album) === norm(leader.albumName));
+    const editions = await findDmmEditions(leader.artistName, leader.albumName, 48);
     let best = null;
     for (const item of editions.slice(0, 6)) {
       const album = await getDmmAlbum(item.hash);

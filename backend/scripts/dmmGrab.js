@@ -50,23 +50,6 @@ async function mbJson(url) {
   }
   throw lastError;
 }
-async function deezerDuration(album, chosen, trackName) {
-  const query = `${album.artist} ${trackName}`;
-  const endpoint = `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=100`;
-  const response = await fetch(endpoint, { signal: AbortSignal.timeout(18000) });
-  if (!response.ok) throw new Error(`Deezer HTTP ${response.status}`);
-  const body = await response.json();
-  if (body.error) throw new Error(`Deezer catalog unavailable (${body.error.code || 'API'})`);
-  const candidates = (body.data || []).filter(r =>
-    clean(r.title_short || r.title) === clean(trackName) &&
-    clean(r.artist?.name) === clean(album.artist) &&
-    clean(r.album?.title) === clean(album.album) &&
-    Number(r.duration) >= 30
-  );
-  const durations = [...new Set(candidates.map(r => Number(r.duration) * 1000))];
-  if (durations.length === 1) return {ms:durations[0], method:'deezer_catalog'};
-  return null;
-}
 async function findReferenceDuration(album, chosen, trackName) {
   const mbid = String(album.mbid || '');
   if (/^[0-9a-f-]{36}$/i.test(mbid)) {

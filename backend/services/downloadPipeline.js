@@ -3,7 +3,8 @@ import { getDownloadClient } from "./download/downloadClientSettings.js";
 import { logger } from "./logger.js";
 import { enqueuePipelineJob, listHonkerJobs } from "./honkerDb.js";
 import { downloadTracker } from "./downloadJobs/downloadTracker.js";
-import { processSlskdPipelinePayload, SLSKD_NOT_CONFIGURED_MESSAGE } from "./slskdOrchestrator.js";
+import { classifyDownloadFailure, recordDownloadEvent } from "./downloadJobs/downloadEventHistory.js";
+import { discardSlskdSearch, processSlskdPipelinePayload, SLSKD_NOT_CONFIGURED_MESSAGE } from "./slskdOrchestrator.js";
 import { processUsenetPipelinePayload } from "./usenetOrchestrator.js";
 import { processYtdlpPipelinePayload } from "./ytdlpOrchestrator.js";
 import { processDmmPipelinePayload } from "./dmmOrchestrator.js";
@@ -20,6 +21,7 @@ import { blockPipelineJobForReview, SEARCH_RESET } from "./pipelineHelpers.js";
 import { isPipelinePayloadActive } from "./downloadJobs/downloadCancellation.js";
 import { deferForInactiveOwner } from "./downloadJobs/playlistOwnerStatus.js";
 import { discardReviewFile } from "./downloadJobs/reviewFiles.js";
+import { providerSchedulerEnabled, releasePipelineProvider } from "./downloadJobs/providerSchedulerRuntime.js";
 
 // Runs one step of a download job: it picks the next enabled source in
 // priority order and hands the step to that source's adapter. Every source
@@ -167,6 +169,10 @@ function summarizeSourceErrors(payload, message) {
 }
 
 async function failOrTryNextSource(payload, job, message, logDetails = {}) {
+  const failedProvider = payload?.providerId || payload?.downloadClient || payload?.source || "slskd";
+  recordDownloadEvent({ jobId: job?.id, category: "provider", event: "provider_failed",
+    provider: failedProvider, attemptId: payload?.downloadAttemptId,
+    reasonCode: classifyDownloadFailure(message), detail: message });
   const nextPayload = buildNextSourcePayload(payload, payload?.source || "slskd", message);
   if (nextPayload) {
     logger.info("downloads", "Trying next download source", {
@@ -176,7 +182,15 @@ async function failOrTryNextSource(payload, job, message, logDetails = {}) {
       reason: message,
       ...logDetails,
     });
+    recordDownloadEvent({ jobId: job?.id, category: "provider", event: "fallback",
+      provider: nextPayload.source, attemptId: payload?.downloadAttemptId,
+      detail: "Previous provider: " + failedProvider + "; reason: " + message });
     downloadTracker.clearSlskdDispatched(job.id);
+    if (providerSchedulerEnabled()) {
+      releasePipelineProvider(payload);
+      return { ...nextPayload, providerId: null, downloadClient: null,
+        triedProviders: [...new Set([...(payload.triedProviders || []), payload.providerId].filter(Boolean))] };
+    }
     return nextPayload;
   }
   if (payload?.albumGrab === true) {
@@ -211,7 +225,10 @@ export async function processPipelinePayload(payload) {
 }
 
 async function processSourcePayload(payload) {
-  if (!isPipelinePayloadActive(payload)) return null;
+  if (!isPipelinePayloadActive(payload)) {
+    await discardSlskdSearch(payload);
+    return null;
+  }
   const currentJob = downloadTracker.getJob(payload.jobId);
   const inactiveOwner = deferForInactiveOwner(payload, currentJob);
   if (inactiveOwner) return inactiveOwner;

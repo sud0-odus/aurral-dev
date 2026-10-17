@@ -48,7 +48,7 @@ test("download client registry validates, updates, and selects adapters", () => 
 test("download adapters expose settings metadata without field values", () => {
   const settings = getDownloadClientSettings();
 
-  assert.deepEqual(Object.keys(settings), ["slskd", "ytdlp", "nzbget", "sabnzbd", "deemix"]);
+  assert.deepEqual(Object.keys(settings), ["slskd", "ytdlp", "nzbget", "sabnzbd", "deemix", "dmm"]);
   assert.deepEqual(settings.nzbget.validation.required, ["url"]);
   assert.deepEqual(settings.slskd.validation.required, ["url"]);
   assert.notEqual(settings.slskd.fields.find((field) => field.key === "apiKey").required, true);

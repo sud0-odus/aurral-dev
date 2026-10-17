@@ -7,6 +7,15 @@
 import { foldDiacritics } from "../providers/brainzmashRanking.js";
 
 export const SOURCE_CAPABILITIES = {
+  dmm: {
+    structuredArtist: true,
+    structuredAlbum: true,
+    structuredDuration: false,
+    providerTrackId: false,
+    filename: false,
+    directoryContext: false,
+    releaseContext: true,
+  },
   deemix: {
     structuredArtist: true,
     structuredAlbum: true,

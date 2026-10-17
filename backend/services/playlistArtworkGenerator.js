@@ -1,11 +1,11 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { dbOps } from "../db/helpers/index.js";
 import { buildPlaylistArtworkWebpBuffer } from "./playlistArtwork.js";
 import sharp from "./sharpConfig.js";
+import axios from "../../lib/axiosFetch.js";
+import { isTrustedArtworkUrl } from "./playlistArtworkSources.js";
 import {
-  fetchImageBuffer,
   renderStylizedPhotoArtwork,
 } from "./discovery/stylizedArtwork.js";
 export const PLAYLIST_ARTWORK_STYLES = ["aurral", "photo"];
@@ -29,21 +29,67 @@ export function getArtworkContentTypeForExtension(extension) {
   return "image/png";
 }
 
-export async function resolvePlaylistSourceImageUrl() {
-  return `https://picsum.photos/800/800?random=${randomUUID()}`;
+// Deliberately no random stock images: a playlist cover must be musically relevant.
+export async function resolvePlaylistSourceImageUrl(imageUrls = []) {
+  return imageUrls.find(isTrustedArtworkUrl) || null;
+}
+async function downloadTrustedCover(url) {
+  if (!isTrustedArtworkUrl(url)) throw new Error("Untrusted playlist cover URL");
+  const response = await axios.get(url, {
+    responseType: "arraybuffer", timeout: 7000, maxRedirects: 0,
+    maxContentLength: 6 * 1024 * 1024, maxBodyLength: 6 * 1024 * 1024,
+    validateStatus: status => status === 200,
+  });
+  return Buffer.from(response.data);
+}
+async function selectCoverImageBuffer(imageUrls) {
+  const urls = [...new Set((Array.isArray(imageUrls) ? imageUrls : []).filter(isTrustedArtworkUrl))].slice(0, 4);
+  const covers = [];
+  for (const url of urls) {
+    try {
+      const buffer = await downloadTrustedCover(url);
+      const meta = await sharp(buffer, { animated: false, limitInputPixels: 20_000_000 }).metadata();
+      if (meta.width < 16 || meta.height < 16) continue;
+      covers.push(buffer);
+    } catch { /* Another album may still provide artwork. */ }
+  }
+  if (!covers.length) throw new Error("No usable album artwork for this playlist");
+  if (covers.length === 1) return covers[0];
+  const tile = 600;
+  const positions = [
+    { left: 0, top: 0 }, { left: tile, top: 0 },
+    { left: 0, top: tile }, { left: tile, top: tile },
+  ];
+  const sources = covers.length === 2 ? [covers[0],covers[1],covers[1],covers[0]] :
+    covers.length === 3 ? [covers[0],covers[1],covers[2],covers[0]] : covers;
+  const layers = await Promise.all(sources.map(async (buffer, index) => ({
+    input: await sharp(buffer, { animated: false, limitInputPixels: 20_000_000 })
+      .resize(tile, tile, { fit: "cover" }).jpeg().toBuffer(),
+    ...positions[index],
+  })));
+  return sharp({ create: { width: 1200, height: 1200, channels: 3, background: "#1b1924" } })
+    .composite(layers).jpeg().toBuffer();
 }
 
-export async function isGeneratedPlaylistArtworkFallback(filePath, { title, kind }) {
+export async function isGeneratedPlaylistArtworkFallback(filePath, { title, kind, artistNames = [] }) {
   try {
     const metadata = await sharp(filePath).metadata();
     if (metadata.width !== 1000 || metadata.height !== 1000) return false;
     const existing = await fs.readFile(filePath);
-    const fallback = await buildPlaylistArtworkWebpBuffer({ playlistName: title, kind });
-    if (path.extname(filePath).toLowerCase() === ".webp") {
-      return existing.equals(fallback);
+    const variants = [
+      await buildPlaylistArtworkWebpBuffer({ playlistName: title, kind, artistNames }),
+    ];
+    if (artistNames.length) {
+      variants.push(await buildPlaylistArtworkWebpBuffer({ playlistName: title, kind }));
     }
-    const jpeg = await sharp(fallback).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
-    return existing.equals(jpeg);
+    if (path.extname(filePath).toLowerCase() === ".webp") {
+      return variants.some(fallback => existing.equals(fallback));
+    }
+    for (const fallback of variants) {
+      const jpeg = await sharp(fallback).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+      if (existing.equals(jpeg)) return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -54,6 +100,8 @@ export async function buildGeneratedPlaylistArtworkBuffer({
   kind = "Playlist",
   style = null,
   paletteSeed = null,
+  imageUrls = [],
+  artistNames = [],
 }) {
   const resolvedStyle = style || getPlaylistArtworkStyle();
   const displayTitle = String(title || "").trim() || "Untitled";
@@ -62,11 +110,13 @@ export async function buildGeneratedPlaylistArtworkBuffer({
     return buildPlaylistArtworkWebpBuffer({
       playlistName: displayTitle,
       kind,
+      artistNames,
     });
   }
 
-  const sourceImageUrl = await resolvePlaylistSourceImageUrl();
-  const sourceBuffer = await fetchImageBuffer(sourceImageUrl);
+  // Use only artwork associated with the playlist's own tracks.
+  // A missing cover falls back to Aurral's music-themed art, not an unrelated photo.
+  const sourceBuffer = await selectCoverImageBuffer(imageUrls);
   return renderStylizedPhotoArtwork({
     imageBuffer: sourceBuffer,
     title: displayTitle,
@@ -87,6 +137,8 @@ export async function writeGeneratedPlaylistArtwork({
   kind = "Playlist",
   style = null,
   paletteSeed = null,
+  imageUrls = [],
+  artistNames = [],
 }) {
   const resolvedStyle = style || getPlaylistArtworkStyle();
   const targetPath = resolveArtworkOutputPath(outputPath, resolvedStyle);
@@ -99,6 +151,8 @@ export async function writeGeneratedPlaylistArtwork({
     kind,
     style: resolvedStyle,
     paletteSeed,
+    imageUrls,
+    artistNames,
   });
 
   for (const extension of [".jpg", ".webp", ".png"]) {

@@ -332,7 +332,11 @@ export class FlowTrackSource {
     if (options?.discoveryCache && typeof options.discoveryCache === "object") {
       return options.discoveryCache;
     }
-    return getUserDiscovery(options?.ownerUserId ?? this._firstActiveAdminId(), 0).body;
+    // An ownerless flow cannot inherit a specific user's taste profile.
+    if (!Number.isSafeInteger(Number(options?.ownerUserId)) || Number(options?.ownerUserId) < 1) {
+      return { basedOn: [], recommendations: [], topGenres: [], topTags: [] };
+    }
+    return getUserDiscovery(options.ownerUserId, 0).body;
   }
 
   _firstActiveAdminId() {

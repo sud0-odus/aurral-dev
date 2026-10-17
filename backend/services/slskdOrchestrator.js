@@ -684,6 +684,7 @@ function searchMonitorFor(payload, activeSearch) {
   if (!monitor) {
     monitor = slskdClient.monitorSearch(activeSearch.id, {
       startedAt: activeSearch.startedAt,
+      queued: activeSearch.queued,
       onSearchSettled: trackSearchWork(payload).onSearchSettled,
     });
     searchMonitors.set(activeSearch.id, monitor);
@@ -721,9 +722,10 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     await stopSearch(payload.activeSearch.id);
   }
   if (activeSearch) {
+    const monitor = searchMonitorFor(payload, activeSearch);
     let result;
     try {
-      result = await searchMonitorFor(payload, activeSearch).poll({
+      result = await monitor.poll({
         shouldCancel: isCancelled,
         earlyExitWhen: (data) =>
           enough(probeAggregatedResults(aggregated, slskdClient.flattenSearchResults(data), seen)),
@@ -742,6 +744,7 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     }
     if (!result.done) {
       return { payload: { ...payload, searchQueryIndex: index,
+        activeSearch: { ...activeSearch, startedAt: monitor.startedAt, queued: monitor.queued },
         delaySeconds: Math.max(1, Math.ceil(result.waitMs / 1000)) } };
     }
     searchMonitors.delete(activeSearch.id);
@@ -1438,6 +1441,12 @@ export async function discardSlskdDownload({ sourcePath, transferId, username })
     transfer: transferId ? { id: transferId } : null,
     username,
   });
+}
+
+export async function discardSlskdSearch(payload) {
+  if (!payload?.activeSearch?.id || !slskdClient.isConfigured()) return;
+  searchMonitors.delete(payload.activeSearch.id);
+  await stopSearch(payload.activeSearch.id);
 }
 
 export function processSlskdPipelinePayload(payload, helpers) {

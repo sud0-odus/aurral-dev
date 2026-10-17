@@ -244,13 +244,19 @@ const generateBlobPath = (cx, cy, r, seed) => {
   return path;
 };
 
-const buildArtworkSvg = ({ playlistName, kind }) => {
+const buildArtworkSvg = ({ playlistName, kind, artistNames = [] }) => {
   const displayName = normalizeDisplayName(playlistName) || "Untitled";
   const normalizedKind = normalizeKind(kind);
   const palette = getPalette(displayName);
   const titleLayout = buildTitleLayout(displayName);
   const seed = hashString(`${normalizedKind}:${displayName}`);
   const angle = seed % 360;
+  const musicContext = [...new Set((Array.isArray(artistNames) ? artistNames : [])
+    .map(name => String(name || "").trim()).filter(Boolean))]
+    .slice(0, 3).join(" · ").slice(0, 72);
+  const musicContextMarkup = musicContext
+    ? `<text x="500" y="945" text-anchor="middle" font-family="system-ui, sans-serif" font-size="25" font-weight="600" fill="${palette.title}" opacity="0.8">${escapeXml(musicContext)}</text>`
+    : "";
 
   const titleMarkup = titleLayout.lines
     .map(
@@ -318,6 +324,7 @@ const buildArtworkSvg = ({ playlistName, kind }) => {
     <path d="${AURRAL_LOGO_PATH}" fill="${palette.title}" />
   </svg>
   <text x="500" y="${titleLayout.y}" text-anchor="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="${titleLayout.fontSize}" font-weight="800" fill="${palette.title}">${titleMarkup}</text>
+  ${musicContextMarkup}
 </svg>`.trim();
 };
 
@@ -331,7 +338,7 @@ export async function writePlaylistArtworkWebpFromBuffer(buffer, outputPath) {
     .toFile(outputPath);
 }
 
-export async function buildPlaylistArtworkWebpBuffer({ playlistName, kind }) {
-  const svg = buildArtworkSvg({ playlistName, kind });
+export async function buildPlaylistArtworkWebpBuffer({ playlistName, kind, artistNames = [] }) {
+  const svg = buildArtworkSvg({ playlistName, kind, artistNames });
   return sharp(Buffer.from(svg)).webp({ quality: PLAYLIST_ARTWORK_WEBP_QUALITY }).toBuffer();
 }

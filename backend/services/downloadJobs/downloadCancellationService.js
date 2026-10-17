@@ -7,6 +7,7 @@ import { logger } from "../logger.js";
 import { downloadTracker } from "./downloadTracker.js";
 import { dbOps } from "../../db/helpers/index.js";
 import { db } from "../../config/db-sqlite.js";
+import { revokePipelineProviderJob } from "./providerSchedulerRuntime.js";
 import {
   cancelDownloadJobs,
   cancelPlaylistDownloadGeneration,
@@ -15,6 +16,7 @@ import {
   isDownloadJobCancelled,
   isPipelinePayloadActive,
   listDownloadProviderWork,
+  listOrphanedSlskdSearchIds,
   restoreDownloadJobCancellations,
   restorePlaylistDownloadWork,
 } from "./downloadCancellation.js";
@@ -362,6 +364,28 @@ function refreshJobs(jobs) {
   });
 }
 
+/** Stop searches whose original download job no longer exists. Retain work
+ * rows after failures so a future startup can retry the cleanup. */
+export async function stopOrphanedSlskdSearches() {
+  const client = getDownloadClient("slskd");
+  if (!client?.isConfigured?.()) return { checked: 0, cleaned: 0 };
+  const ids = listOrphanedSlskdSearchIds();
+  let cleaned = 0;
+  for (const id of ids) {
+    try {
+      const removed = await client.deleteSearch(id, { timeout: 20000 });
+      if (!removed) throw new Error("slskd did not confirm search removal");
+      clearDownloadProviderWork({ provider: "slskd-search", workId: id });
+      cleaned++;
+    } catch (error) {
+      logger.warn("slskd", "Failed to clean orphaned search", {
+        searchId: id, reason: error?.message || String(error),
+      });
+    }
+  }
+  return { checked: ids.length, cleaned };
+}
+
 export function markDownloadWorkCancelledForJobs(jobs = []) {
   const normalizedJobs = Array.isArray(jobs) ? jobs.filter((job) => job?.id) : [];
   const rows = listHonkerJobs(PIPELINE_QUEUE);
@@ -370,6 +394,7 @@ export function markDownloadWorkCancelledForJobs(jobs = []) {
       captureCancellationWork(`downloadCancellationWork:${job.id}`, [job], rows.filter((row) => row.payload?.jobId === job.id).map((row) => row.payload));
     }
     cancelDownloadJobs(normalizedJobs.map((job) => job.id));
+    for (const job of normalizedJobs) revokePipelineProviderJob(job.id);
   })();
   return normalizedJobs;
 }
@@ -392,6 +417,7 @@ export function markPlaylistDownloadWorkCancelled(playlistId, jobs = []) {
     .map((job) => job.id);
   const generation = cancelPlaylistDownloadGeneration(safePlaylistId);
   cancelDownloadJobs(normalizedJobs.map((job) => job.id));
+  for (const job of normalizedJobs) revokePipelineProviderJob(job.id);
   return { generation, jobs: normalizedJobs, wasActive, jobsToRestore };
 }
 

@@ -97,8 +97,10 @@ test("provider cancellation retry retains IDs from pipeline rows removed on the 
 test("playlist deletion invalidates queued payloads across recreation", () => {
   const playlistId = "shared-playlist";
   const firstGeneration = activatePlaylistDownloadGeneration(playlistId);
+  const jobId = downloadTracker.addJob({ artistName: "Generation Artist",
+    trackName: "Generation Track" }, playlistId);
   const payload = {
-    jobId: "job-one",
+    jobId,
     playlistId,
     playlistGeneration: firstGeneration,
   };
@@ -111,10 +113,12 @@ test("playlist deletion invalidates queued payloads across recreation", () => {
   const recreatedGeneration = activatePlaylistDownloadGeneration(playlistId);
   assert.equal(recreatedGeneration, firstGeneration + 1);
   assert.equal(isPipelinePayloadActive(payload), false);
+  const newJobId = downloadTracker.addJob({ artistName: "Generation Artist",
+    trackName: "Recreated Track" }, playlistId);
   assert.equal(
     isPipelinePayloadActive({
       ...payload,
-      jobId: "job-two",
+      jobId: newJobId,
       playlistGeneration: recreatedGeneration,
     }),
     true,
@@ -184,14 +188,13 @@ test("quality-upgrade jobs retain their source playlist generation", () => {
 });
 
 test("job cancellation remains effective after the tracker row is removed", () => {
-  const payload = {
-    jobId: "job-removed",
-    playlistId: "shared-playlist",
-    playlistGeneration: 0,
-  };
+  const jobId = downloadTracker.addJob({ artistName: "Removed Artist",
+    trackName: "Removed Track" }, "shared-playlist");
+  const payload = { jobId, playlistId: "shared-playlist", playlistGeneration: 0 };
 
   assert.equal(isPipelinePayloadActive(payload), true);
   cancelDownloadJob(payload.jobId);
+  downloadTracker.removeJob(jobId);
   assert.equal(isPipelinePayloadActive(payload), false);
 });
 
