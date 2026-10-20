@@ -47,3 +47,10 @@ Keep CT120 scheduled downloading active; do not enable Deemix or NZBGet; preserv
 - Per-source: slskd 23 done/4 downloading/3 pending; yt-dlp 25 done/9 downloading/4 pending; usenet 20 downloading/4 pending, no completed; dmm 7 pending, no completed; unassigned 169 done/2,955 pending.
 - Reservation-age query did not execute: user-facing diagnostic script had a Python f-string quoting error (`NameError: name 'provider_id' is not defined`). No ages or scheduler event counts collected yet. Do not treat the lack of data as a scheduler problem.
 - Interpretation: `downloading` reflects job state and is not proof of active transfers; 33 such rows vs prior 9 reservations warrants checking claim/attempt lifecycles and provider health. Do not change provider capacity or force-release reservations based only on this snapshot.
+
+## Reservation follow-up (user-provided, subsequent CT120 sample)
+- Reservation counts and oldest age: DMM 5 / 14.6m; SABnzbd 5 / 22.5m; slskd 5 / 30.2m; yt-dlp 5 / 8.8m; **20 total reservations**.
+- Scheduler `provider_selected` event counts in preceding hour: DMM 85; SABnzbd 49; slskd 19; yt-dlp 28; **181 events total**. Events are not unique tracks, transfer attempts, or completions.
+- Prior queue snapshot had DMM zero completed, Usenet zero completed, slskd 23 done, yt-dlp 25 done. Different snapshot timestamps; do not treat these counts as an exact synchronized sample.
+- Interpretation: all four providers have five reserved slots, and DMM/SABnzbd selection activity is high despite no observed completions. Distinguish repeated selections/retries/fallbacks from normal multi-stage work before changing scheduling behavior. A 30m reservation can be productive (slskd), so do **not** auto-expire by age.
+- Next targeted investigation: correlate recent `provider_selected` events by distinct `job_id`/`attempt_id`, lifecycle outcomes by source and elapsed age, and read-only provider queue state. Confirm effective maxActive configuration and how reservations release. Avoid exposing track names or credentials.
