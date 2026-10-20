@@ -46,6 +46,10 @@ const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 10;
 const JOB_COOLDOWN_MS = 750;
 const REUSE_REPAIR_INTERVAL_MS = 30 * 60 * 1000;
+// Limit startup bursts so IPC heartbeats can run between dispatch batches.
+const DISPATCH_BATCH_SIZE = 2;
+const DISPATCH_YIELD_MS = 250;
+
 const WORKER_STOPPED_CODE = "WORKER_STOPPED";
 const PLAYLIST_MUTATION_CODE = "PLAYLIST_MUTATION_IN_PROGRESS";
 // The worker hands a job to the pipeline only while fewer jobs than its
@@ -454,7 +458,12 @@ export class DownloadWorker {
       if (process.env.AURRAL_CT119_PAUSE_ACQUISITION === "1") return;
       const { concurrency: legacyConcurrency } = this.getWorkerSettings();
       const concurrency = providerSchedulerEnabled() ? providerSchedulerMaxWorkers() : legacyConcurrency;
+      let dispatchedThisBatch = 0;
       while (this.activeCount < concurrency) {
+        if (dispatchedThisBatch >= DISPATCH_BATCH_SIZE) {
+          this._scheduleProcessIn(DISPATCH_YIELD_MS);
+          break;
+        }
         if (!providerSchedulerEnabled() && this.activeCount + countSearchingPipelineJobs() >= concurrency) {
           this._scheduleProcessIn(SEARCH_SLOT_RECHECK_MS);
           break;
@@ -473,6 +482,7 @@ export class DownloadWorker {
         }
 
         this.activeCount++;
+        dispatchedThisBatch++;
         console.log(`[DownloadWorker] Allocated slot ${this.activeCount}/${concurrency} for ${job.id}`);
         this.currentJob = {
           id: job.id,
@@ -531,7 +541,13 @@ export class DownloadWorker {
       }, 30000);
       this.healthTimer.unref?.();
     }
-    this.scheduleReuseLinkRepair(true);
+    // Operational escape hatch for emergency startup recovery. Do not run a
+    // filesystem-wide repair while the worker is repeatedly timing out.
+    if (process.env.AURRAL_SKIP_STARTUP_REUSE_REPAIR === "1") {
+      console.warn("[DownloadWorker] Startup reuse repair skipped by AURRAL_SKIP_STARTUP_REUSE_REPAIR");
+    } else {
+      this.scheduleReuseLinkRepair(true);
+    }
   }
 
   async checkDownloadHealth() {
