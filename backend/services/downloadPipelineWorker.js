@@ -59,6 +59,16 @@ export function processPipelineJob(payload, dependencies = {}) {
   });
 }
 
+// Prevent concurrent pipeline work from saturating the downloads process.
+// SQLite reservations control providers, but do not bound the number of
+// expensive active Honker pipeline jobs and JS settings/metadata operations.
+// Restrict to two consumers by default, independently of provider capacity.
+// Operators may reduce to one or increase (up to sixteen) after validation.
+export function pipelineConsumerLimit(env = process.env) {
+  const raw = Number(env.AURRAL_PIPELINE_MAX_CONSUMERS ?? 2);
+  return Number.isFinite(raw) ? Math.min(16, Math.max(1, Math.floor(raw))) : 2;
+}
+
 // Each consumer claims a different durable Honker message. Capacity is
 // independently enforced by SQLite reservations, not the number of consumers.
 const pipelineConsumers = Array.from({ length: 16 }, (_, index) => createHonkerWorker({
@@ -69,6 +79,7 @@ const pipelineConsumers = Array.from({ length: 16 }, (_, index) => createHonkerW
   retryDelayS: 30,
   shouldRestart: () => process.env.AURRAL_CT119_PAUSE_ACQUISITION !== "1" && isAnyDownloadSourceConfigured(),
   onStart() {
+    if (index >= pipelineConsumerLimit()) return false;
     if (process.env.AURRAL_CT119_PAUSE_ACQUISITION === "1") return false;
     if (!isAnyDownloadSourceConfigured()) return false;
     if (providerSchedulerEnabled()) {
