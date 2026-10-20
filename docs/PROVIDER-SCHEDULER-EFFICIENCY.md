@@ -41,3 +41,9 @@ This change is currently source-only. Don't merge/deploy until CI and staging/li
 
 ## Guardrails
 Keep CT120 scheduled downloading active; do not enable Deemix or NZBGet; preserve environment files and backups. Never publish provider credentials, tokens, track names, hostnames or identifying media details in issue/PR logs.
+
+## New live observation — subsequent CT120 snapshot (user-provided)
+- Totals: 217 done, 33 downloading, 2,973 pending, 0 failed rows shown; 3,223 total. Previous snapshot was 204 done, 6 downloading, 3,012 pending, 1 failed. Status change of the failed row is not explained.
+- Per-source: slskd 23 done/4 downloading/3 pending; yt-dlp 25 done/9 downloading/4 pending; usenet 20 downloading/4 pending, no completed; dmm 7 pending, no completed; unassigned 169 done/2,955 pending.
+- Reservation-age query did not execute: user-facing diagnostic script had a Python f-string quoting error (`NameError: name 'provider_id' is not defined`). No ages or scheduler event counts collected yet. Do not treat the lack of data as a scheduler problem.
+- Interpretation: `downloading` reflects job state and is not proof of active transfers; 33 such rows vs prior 9 reservations warrants checking claim/attempt lifecycles and provider health. Do not change provider capacity or force-release reservations based only on this snapshot.
