@@ -92,7 +92,7 @@ export function getProviderReservationClaimStats() {
   // Honker initializes its live queue table separately. In lightweight test
   // environments it may not exist yet; never fail module initialization.
   const queueExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_honker_live'").get();
-  if (!queueExists) return [];
+  if (!queueExists) return null;
   return db.prepare(RESERVATION_CLAIM_STATS_SQL).all().map((row) => ({
     providerId: row.provider_id,
     jobStatus: row.job_status,
@@ -147,7 +147,7 @@ export function getProviderSchedulerStats() {
     workerCeiling: providerSchedulerMaxWorkers(),
     sourceOutcomes: getDownloadSourceOutcomeStats(),
     lastHourProviderEvents: getRecentProviderEventStats(now),
-    reservationClaimsAvailable: Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_honker_live'").get()),
+    // Null means unavailable; [] means available with no matching claims.
     reservationClaims: getProviderReservationClaimStats(),
     unassignedReservations: ages.get(null) || null,
     providers: getProviderSchedulerCapacity().map((p) => ({
