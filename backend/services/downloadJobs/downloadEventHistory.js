@@ -34,7 +34,7 @@ export function recordDownloadEvent({
   jobId = null, category = "download", event, provider = null,
   detail = null, attemptId = null, reasonCode = null,
 } = {}) {
-  if (!event) return false;
+  if (!event || process.env.AURRAL_DISABLE_DOWNLOAD_EVENT_HISTORY === "1") return false;
   try {
     write.run(Date.now(),shorten(jobId,128),shorten(category,48) || "download",
       shorten(event,80),shorten(provider,64),
