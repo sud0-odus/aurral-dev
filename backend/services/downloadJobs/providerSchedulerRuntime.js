@@ -3,6 +3,7 @@ import { dbOps } from "../../db/helpers/index.js";
 import { getDownloadSourceStatus } from "../downloadSourceService.js";
 import { planProviderDispatch, PROVIDER_SOURCES } from "./providerSchedulerPolicy.js";
 import { recordDownloadEvent } from "./downloadEventHistory.js";
+import { RESERVATION_CLAIM_STATS_SQL } from "./providerSchedulerReservationQuery.js";
 
 // Opt-in until the real provider integrations have been exercised in staging.
 export const providerSchedulerEnabled = () => process.env.AURRAL_PROVIDER_SCHEDULER === "1";
@@ -63,10 +64,100 @@ export function getProviderSchedulerCapacity() {
   }));
 }
 
+// Read-only diagnostics: age is measured from the original reservation, not
+// the most recent provider switch. Old reservations are candidates for review,
+// NOT permission to release a potentially live download.
+const reservationDiagnostics = db.prepare(`
+  SELECT provider_id, COUNT(*) AS reservations,
+    MIN(created_at) AS oldest_created_at,
+    SUM(CASE WHEN created_at <= ? THEN 1 ELSE 0 END) AS older_than_15m,
+    SUM(CASE WHEN created_at <= ? THEN 1 ELSE 0 END) AS older_than_60m
+  FROM download_provider_reservations
+  GROUP BY provider_id
+`);
+
+// Source-level outcome counters. These describe job rows, NOT provider-client
+// transfer telemetry. In particular, "usenet" cannot distinguish SABnzbd from
+// NZBGet, and unassigned jobs must remain visible rather than attributed.
+const downloadOutcomeCounts = db.prepare(`
+  SELECT COALESCE(download_source, 'unassigned') AS source,
+    status, COUNT(*) AS count
+  FROM playlist_download_jobs
+  GROUP BY download_source, status
+`);
+
+// Match the same durable queue claim used by orphan reconciliation, but
+// observe only: an absent claim may reflect an in-flight worker transition.
+export function getProviderReservationClaimStats() {
+  // Honker initializes its live queue table separately. In lightweight test
+  // environments it may not exist yet; never fail module initialization.
+  const queueExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_honker_live'").get();
+  if (!queueExists) return null;
+  return db.prepare(RESERVATION_CLAIM_STATS_SQL).all().map((row) => ({
+    providerId: row.provider_id,
+    jobStatus: row.job_status,
+    hasQueueClaim: Boolean(row.has_queue_claim),
+    count: row.count,
+  }));
+}
+
+export function getDownloadSourceOutcomeStats() {
+  const bySource = new Map();
+  for (const row of downloadOutcomeCounts.all()) {
+    if (!bySource.has(row.source)) bySource.set(row.source, {});
+    bySource.get(row.source)[row.status] = row.count;
+  }
+  return [...bySource].map(([source, statuses]) => ({ source, statuses }));
+}
+
+// Aggregate the existing operational event history rather than creating a
+// parallel lifecycle log. Counts are event occurrences, not unique downloads.
+const recentProviderEvents = db.prepare(`
+  SELECT COALESCE(provider, 'unassigned') AS provider, event,
+    COUNT(*) AS count, COUNT(DISTINCT job_id) AS distinctJobs,
+    COUNT(DISTINCT attempt_id) AS distinctAttempts
+  FROM download_operation_events
+  WHERE occurred_at >= ? AND category IN ('provider', 'scheduler')
+    AND event IN ('provider_selected', 'provider_failed', 'fallback')
+  GROUP BY COALESCE(provider, 'unassigned'), event
+`);
+
+export function getRecentProviderEventStats(now = Date.now()) {
+  return recentProviderEvents.all(now - 60 * 60_000).map((row) => ({
+    provider: row.provider,
+    event: row.event,
+    count: row.count,
+    distinctJobs: row.distinctJobs,
+    distinctAttempts: row.distinctAttempts,
+  }));
+}
+
 export function getProviderSchedulerStats() {
-  return { enabled: providerSchedulerEnabled(), providers: getProviderSchedulerCapacity().map((p) => ({
-    ...p, available: p.enabled ? Math.max(0, p.maxActive - p.active) : 0,
-  })) };
+  const now = Date.now();
+  const ages = new Map(reservationDiagnostics.all(now - 15 * 60_000, now - 60 * 60_000)
+    .map((row) => [row.provider_id, {
+      oldestReservationAgeMs: Math.max(0, now - row.oldest_created_at),
+      olderThan15m: row.older_than_15m,
+      olderThan60m: row.older_than_60m,
+    }]));
+  return {
+    enabled: providerSchedulerEnabled(),
+    sampledAt: now,
+    // The worker ceiling is a configured upper bound, not active transfers.
+    workerCeiling: providerSchedulerMaxWorkers(),
+    sourceOutcomes: getDownloadSourceOutcomeStats(),
+    lastHourProviderEvents: getRecentProviderEventStats(now),
+    // Null means unavailable; [] means available with no matching claims.
+    reservationClaims: getProviderReservationClaimStats(),
+    unassignedReservations: ages.get(null) || null,
+    providers: getProviderSchedulerCapacity().map((p) => ({
+      ...p,
+      available: p.enabled ? Math.max(0, p.maxActive - p.active) : 0,
+      oldestReservationAgeMs: ages.get(p.id)?.oldestReservationAgeMs ?? null,
+      olderThan15m: ages.get(p.id)?.olderThan15m ?? 0,
+      olderThan60m: ages.get(p.id)?.olderThan60m ?? 0,
+    })),
+  };
 }
 
 export function providerSchedulerMaxWorkers() {
@@ -125,7 +216,7 @@ export function reservePipelineProvider(payload) {
       insertReservation.run(payload.jobId, payload.downloadAttemptId, assignment.providerId, now, now);
     }
     if(old?.provider_id!==assignment.providerId) recordDownloadEvent({
-      jobId:payload.jobId,category:"scheduler",event:"provider_selected",provider:assignment.providerId});
+      jobId:payload.jobId,attemptId:payload.downloadAttemptId,category:"scheduler",event:"provider_selected",provider:assignment.providerId});
     return {
       ...payload,
       ...assignment,
