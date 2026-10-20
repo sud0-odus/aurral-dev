@@ -46,6 +46,30 @@ export function enqueuePendingJobsWithoutBatch() {
   return count;
 }
 
+export async function enqueuePendingJobsWithoutBatchCooperatively({ yieldEvery = 16 } = {}) {
+  if (!isAnyDownloadSourceConfigured()) return 0;
+  const activePipelineJobIds = new Set(
+    listHonkerJobs("slskd-pipeline")
+      .map((entry) => String(entry.payload?.jobId || "").trim())
+      .filter(Boolean),
+  );
+  const batchSize = Math.max(1, Math.floor(Number(yieldEvery) || 16));
+  let count = 0;
+  let visited = 0;
+  for (const job of downloadTracker.getByStatus("pending")) {
+    if (visited > 0 && visited % batchSize === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    visited += 1;
+    const hasProviderSearch = job.slskdBatchId || job.slskdSearchId;
+    if (!hasProviderSearch && job.manualReplacementSearch !== true) continue;
+    if (activePipelineJobIds.has(job.id)) continue;
+    downloadTracker.clearSlskdPipelineState(job.id);
+    if (downloadTracker.enqueueDownloadPipeline(job.id)) count += 1;
+  }
+  return count;
+}
+
 async function failJob(job, message) {
   if (job.upgradeForJobId) {
     const { finalizeQualityUpgradeFailure } = await import("./qualityProfileService.js");

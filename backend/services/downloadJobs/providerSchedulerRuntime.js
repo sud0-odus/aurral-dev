@@ -174,3 +174,27 @@ export function reconcilePipelineReservations() {
     return removed;
   })();
 }
+
+export async function reconcilePipelineReservationsCooperatively({ yieldEvery = 16 } = {}) {
+  if (!providerSchedulerEnabled()) return 0;
+  const rows = db.prepare("SELECT job_id, attempt_id FROM download_provider_reservations").all();
+  const jobStatus = db.prepare("SELECT status FROM playlist_download_jobs WHERE id = ?");
+  const queuedAttempt = db.prepare(`SELECT 1 FROM _honker_live
+    WHERE queue = 'slskd-pipeline' AND json_valid(payload)
+      AND json_extract(payload, '$.jobId') = ?
+      AND json_extract(payload, '$.downloadAttemptId') = ? LIMIT 1`);
+  const batchSize = Math.max(1, Math.floor(Number(yieldEvery) || 16));
+  let removed = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    if (index > 0 && index % batchSize === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const row = rows[index];
+    const job = jobStatus.get(row.job_id);
+    const queued = queuedAttempt.get(row.job_id, row.attempt_id);
+    if (!job || ["done", "failed", "cancelled", "blocked"].includes(job.status) || !queued) {
+      removed += deleteReservation.run(row.job_id, row.attempt_id).changes;
+    }
+  }
+  return removed;
+}

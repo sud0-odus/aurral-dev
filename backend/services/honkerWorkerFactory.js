@@ -129,6 +129,9 @@ export default function createHonkerWorker({
         if (typeof filterJob === "function" && filterJob(job) === false) {
           job.ack();
           idleController.arm();
+          // An immediately-claimable Honker queue can otherwise keep resolving
+          // promises in one microtask chain and starve timers, IPC, and signals.
+          await new Promise((resolve) => setImmediate(resolve));
           continue;
         }
         if (typeof onJobDequeue === "function") {
@@ -179,6 +182,10 @@ export default function createHonkerWorker({
           }
         }
         idleController.arm();
+        // Honker resolves claim() immediately while a queue remains non-empty.
+        // Yield to a libuv turn between jobs so process timers, IPC heartbeats,
+        // shutdown signals, and other queues cannot be starved by a hot queue.
+        await new Promise((resolve) => setImmediate(resolve));
       }
     } catch (error) {
       if (typeof onLoopError === "function") {

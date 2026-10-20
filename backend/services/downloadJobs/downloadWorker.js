@@ -45,6 +45,9 @@ const SEARCH_SLOT_RECHECK_MS = 2000;
 const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 10;
 const JOB_COOLDOWN_MS = 750;
+// Bound synchronous dispatch per event-loop turn without changing configured concurrency.
+const DISPATCH_BATCH_SIZE = 2;
+const DISPATCH_YIELD_MS = 0;
 const REUSE_REPAIR_INTERVAL_MS = 30 * 60 * 1000;
 const WORKER_STOPPED_CODE = "WORKER_STOPPED";
 const PLAYLIST_MUTATION_CODE = "PLAYLIST_MUTATION_IN_PROGRESS";
@@ -88,7 +91,7 @@ export class DownloadWorker {
   }
 
   _scheduleProcessIn(delayMs = JOB_COOLDOWN_MS) {
-    const waitMs = Math.max(250, Math.floor(Number(delayMs) || JOB_COOLDOWN_MS));
+    const waitMs = delayMs === 0 ? 0 : Math.max(250, Math.floor(Number(delayMs) || JOB_COOLDOWN_MS));
     if (!this.running || this.processTimer) return;
     this.processTimer = setTimeout(() => {
       this.processTimer = null;
@@ -445,21 +448,39 @@ export class DownloadWorker {
 
     this.runGeneration += 1;
     this.running = true;
+    const diag = process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1" &&
+      process.env.AURRAL_BACKGROUND_WORKER_GROUP === "downloads";
+    const trace = (stage) => {
+      if (diag) console.warn("[WorkerDispatchDiag]", JSON.stringify({
+        pid: process.pid, stage, uptimeMs: Math.round(process.uptime() * 1000),
+      }));
+    };
+    trace("pipeline-start-begin");
     startDownloadPipelineWorker();
+    trace("pipeline-start-return");
     console.log("[DownloadWorker] Starting worker...");
 
     this.processLoop = () => {
       if (!this.running) return;
       // CT119: pause new acquisition dispatch without deleting pending jobs.
       if (process.env.AURRAL_CT119_PAUSE_ACQUISITION === "1") return;
+      trace("settings-read-begin");
       const { concurrency: legacyConcurrency } = this.getWorkerSettings();
+      trace("settings-read-return");
       const concurrency = providerSchedulerEnabled() ? providerSchedulerMaxWorkers() : legacyConcurrency;
+      let dispatchedThisBatch = 0;
       while (this.activeCount < concurrency) {
+        if (dispatchedThisBatch >= DISPATCH_BATCH_SIZE) {
+          this._scheduleProcessIn(DISPATCH_YIELD_MS);
+          break;
+        }
         if (!providerSchedulerEnabled() && this.activeCount + countSearchingPipelineJobs() >= concurrency) {
           this._scheduleProcessIn(SEARCH_SLOT_RECHECK_MS);
           break;
         }
+        trace("pending-job-select-begin");
         const job = this._getNextReadyPendingJob(this.lastDequeuedPlaylistType);
+        trace("pending-job-select-return");
         if (!job) {
           break;
         }
@@ -473,6 +494,7 @@ export class DownloadWorker {
         }
 
         this.activeCount++;
+        dispatchedThisBatch++;
         console.log(`[DownloadWorker] Allocated slot ${this.activeCount}/${concurrency} for ${job.id}`);
         this.currentJob = {
           id: job.id,
@@ -518,7 +540,9 @@ export class DownloadWorker {
       }
     };
 
+    trace("first-process-loop-begin");
     this.processLoop();
+    trace("first-process-loop-return");
     // One watchdog observes durable queue claims and provider work. A track is
     // requeued only after two consecutive checks show it orphaned.
     if (!this.healthTimer) {
@@ -531,7 +555,11 @@ export class DownloadWorker {
       }, 30000);
       this.healthTimer.unref?.();
     }
-    this.scheduleReuseLinkRepair(true);
+    if (process.env.AURRAL_SKIP_STARTUP_REUSE_REPAIR === "1") {
+      console.warn("[DownloadWorker] Startup reuse repair skipped by AURRAL_SKIP_STARTUP_REUSE_REPAIR");
+    } else {
+      this.scheduleReuseLinkRepair(true);
+    }
   }
 
   async checkDownloadHealth() {
