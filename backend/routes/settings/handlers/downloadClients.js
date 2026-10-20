@@ -1,4 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
 import { validateExternalUrl } from "../../../middleware/urlValidator.js";
 import { getProviderSchedulerStats } from "../../../services/downloadJobs/providerSchedulerRuntime.js";
 import {
@@ -76,6 +78,7 @@ export function registerDownloadClients(router) {
     }
     res.json({
       observedAt: new Date().toISOString(),
+      controlAvailable: Boolean(process.env.AURRAL_SERVICE_CONTROL_HELPER),
       scheduler: getProviderSchedulerStats(),
       flags: {
         providerScheduler: process.env.AURRAL_PROVIDER_SCHEDULER === "1",
@@ -84,6 +87,25 @@ export function registerDownloadClients(router) {
       },
       applePocBridge: bridge,
     });
+  });
+
+  router.post("/download-clients/runtime/apply", async (req, res) => {
+    const { feature, enabled } = req.body || {};
+    if (!["scheduler", "apple-poc"].includes(feature) || typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "Invalid service control request" });
+    }
+    const controller = process.env.AURRAL_SERVICE_CONTROL_HELPER;
+    if (!controller || !controller.startsWith("/") || !/^\\/[a-zA-Z0-9/_-]+$/.test(controller)) {
+      return res.status(503).json({ error: "Local service controller is not configured" });
+    }
+    try {
+      await execFileAsync(controller, [feature, enabled ? "enable" : "disable"], {
+        timeout: 15000, windowsHide: true, shell: false,
+      });
+      return res.status(202).json({ accepted: true, message: "Change requested; refresh to verify effective runtime state." });
+    } catch {
+      return res.status(502).json({ error: "Service controller failed; runtime change not verified." });
+    }
   });
 
   router.get("/download-clients/scheduler", (_req, res) => {
