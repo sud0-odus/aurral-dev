@@ -100,3 +100,10 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 ## CI and diagnostic availability update
 - Corrected CI run 39370349883: production container job passed; remaining validation jobs were still running when last inspected. Do not call the full suite passed until all jobs conclude.
 - Added `reservationClaimsAvailable` to stats so an absent `_honker_live` table is explicitly distinguishable from a real zero-count snapshot. Read-only schema inspection, no scheduler dispatch changes.
+
+## Existing operational snapshot discovered during continued audit
+- `backend/services/downloadJobs/downloadOperationalSnapshot.js` already computes pipeline counts, candidate stale reservations, recent event history, recent jobs, and stalled candidates. This overlaps with planned observability; reuse it instead of creating a second monitoring subsystem.
+- Caution: that snapshot detects reservation candidates by comparing `updated_at` to a 30-minute threshold and filtering active job IDs from `_honker_live`, while PR #21's new diagnostic compares exact job + attempt IDs. These are different semantics and should not be treated as identical stale verdicts.
+- The existing snapshot can include artist/track names and error details, so **do not expose or publish its raw payload as telemetry**. Keep the new scheduler aggregate response anonymized.
+- Pipeline provider failures already record `attemptId` in `downloadPipeline.js` (`provider_failed`, `fallback`); PR #21 adds the missing `attemptId` on `provider_selected`, enabling consistent timeline correlation after deployment.
+- CI workflow 39370498757: production-container validation succeeded; remaining jobs were in progress at the last observation. Wait for the full suite; do not claim it passed.
