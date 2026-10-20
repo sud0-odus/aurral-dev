@@ -52,3 +52,49 @@ test("background workers log retrying and final failures without exposing the jo
     logger.error = originalError;
   }
 });
+
+
+test("background workers yield to the event loop while draining immediately claimable jobs", async () => {
+  const totalJobs = 50;
+  let completed = 0;
+  let completedWhenImmediateRan = null;
+  const jobs = Array.from({ length: totalJobs }, (_, index) => ({
+    id: index + 1,
+    attempts: 1,
+    payload: { kind: "event-loop-yield-test" },
+    heartbeat() {},
+    ack() {},
+    fail() {},
+    retry() {},
+  }));
+  const queue = {
+    maxAttempts: 1,
+    visibilityTimeoutS: 30,
+    async *claim() {
+      yield* jobs;
+    },
+  };
+  const immediateTurn = new Promise((resolve) => {
+    setImmediate(() => {
+      completedWhenImmediateRan = completed;
+      resolve();
+    });
+  });
+  const worker = createHonkerWorker({
+    name: "event-loop-yield-test",
+    getQueue: () => queue,
+    processJob: () => {
+      completed += 1;
+    },
+    shouldRestart: () => false,
+  });
+
+  await worker.start();
+  await immediateTurn;
+
+  assert.equal(completed, totalJobs);
+  assert.ok(
+    completedWhenImmediateRan < totalJobs,
+    `expected a macrotask turn before all jobs drained; immediate ran after ${completedWhenImmediateRan}`,
+  );
+});
