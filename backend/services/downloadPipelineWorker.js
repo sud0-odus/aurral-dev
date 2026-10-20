@@ -3,7 +3,7 @@ import { getPipelineQueue } from "./honkerDb.js";
 import {
   continuePipeline,
   processPipelinePayload,
-  enqueuePendingJobsWithoutBatch,
+  enqueuePendingJobsWithoutBatchCooperatively,
   failPipelineJob,
   ALBUM_GRAB_ENDED_REASON,
 } from "./downloadPipeline.js";
@@ -77,7 +77,13 @@ const pipelineConsumers = Array.from({ length: 16 }, (_, index) => createHonkerW
     } else if (index > (process.env.AURRAL_PIPELINE_CONSUMERS === "2" ? 1 : 0)) {
       return false;
     }
-    if (index === 0) enqueuePendingJobsWithoutBatch();
+    if (index === 0) {
+      void enqueuePendingJobsWithoutBatchCooperatively().catch((error) => {
+        logger.warn("downloads", "Could not recover pending pipeline jobs on startup", {
+          reason: error?.message || String(error),
+        });
+      });
+    }
     return true;
   },
   processJob: processPipelineJob,
