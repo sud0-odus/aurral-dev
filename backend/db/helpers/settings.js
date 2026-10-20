@@ -24,8 +24,25 @@ const deleteSettingStmt = db.prepare("DELETE FROM settings WHERE key = ?");
 
 const PLAYLIST_WORKER_RETRY_CYCLE_MINUTES = 360;
 
+// The large shared-playlist JSON value can exceed 1 MiB. The downloads worker
+// refreshes settings every two seconds, so parsing it unconditionally can
+// monopolize the event loop and starve the supervisor heartbeat. Cache only
+// the parsed snapshot while the underlying persisted text remains identical.
+// Comparing the text on every refresh preserves cross-process updates.
+let sharedPlaylistsJsonText = undefined;
+let sharedPlaylistsParsed = undefined;
+
+function parseStoredSettingJson(key, value) {
+  if (key !== "sharedPlaylists") return dbHelpers.parseJSON(value);
+  if (value === sharedPlaylistsJsonText) return sharedPlaylistsParsed;
+  const parsed = dbHelpers.parseJSON(value);
+  sharedPlaylistsJsonText = value;
+  sharedPlaylistsParsed = parsed;
+  return parsed;
+}
+
 function readStoredSettingJson(primaryKey, legacyKeys = []) {
-  const primary = dbHelpers.parseJSON(getSettingStmt.get(primaryKey)?.value);
+  const primary = parseStoredSettingJson(primaryKey, getSettingStmt.get(primaryKey)?.value);
   if (primary != null) return primary;
   for (const legacyKey of legacyKeys) {
     const legacy = dbHelpers.parseJSON(getSettingStmt.get(legacyKey)?.value);
