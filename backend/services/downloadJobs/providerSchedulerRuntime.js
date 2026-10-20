@@ -3,6 +3,7 @@ import { dbOps } from "../../db/helpers/index.js";
 import { getDownloadSourceStatus } from "../downloadSourceService.js";
 import { planProviderDispatch, PROVIDER_SOURCES } from "./providerSchedulerPolicy.js";
 import { recordDownloadEvent } from "./downloadEventHistory.js";
+import { RESERVATION_CLAIM_STATS_SQL } from "./providerSchedulerReservationQuery.js";
 
 // Opt-in until the real provider integrations have been exercised in staging.
 export const providerSchedulerEnabled = () => process.env.AURRAL_PROVIDER_SCHEDULER === "1";
@@ -87,21 +88,7 @@ const downloadOutcomeCounts = db.prepare(`
 
 // Match the same durable queue claim used by orphan reconciliation, but
 // observe only: an absent claim may reflect an in-flight worker transition.
-const reservationClaimDiagnostics = db.prepare(`
-  SELECT r.provider_id AS provider_id,
-    COALESCE(j.status, 'missing_job') AS job_status,
-    CASE WHEN EXISTS (
-      SELECT 1 FROM _honker_live h
-      WHERE h.queue = 'slskd-pipeline'
-        AND json_valid(h.payload)
-        AND json_extract(h.payload, '$.jobId') = r.job_id
-        AND json_extract(h.payload, '$.downloadAttemptId') = r.attempt_id
-    ) THEN 1 ELSE 0 END AS has_queue_claim,
-    COUNT(*) AS count
-  FROM download_provider_reservations r
-  LEFT JOIN playlist_download_jobs j ON j.id = r.job_id
-  GROUP BY r.provider_id, COALESCE(j.status, 'missing_job'), has_queue_claim
-`);
+const reservationClaimDiagnostics = db.prepare(RESERVATION_CLAIM_STATS_SQL);
 
 export function getProviderReservationClaimStats() {
   return reservationClaimDiagnostics.all().map((row) => ({
