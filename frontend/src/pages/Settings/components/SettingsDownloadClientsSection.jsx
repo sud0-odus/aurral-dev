@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   getDownloadWorkerSettings,
+  getDownloadRuntimeStatus,
   updateDownloadWorkerSettings,
   testDownloadClientConnection,
 } from "../../../utils/api/endpoints/settings.js";
@@ -77,6 +78,8 @@ export function SettingsDownloadClientsSection({
   showInfo,
 }) {
   const [workerConcurrency, setWorkerConcurrency] = useState(null);
+  const [runtime, setRuntime] = useState(null);
+  const [runtimeError, setRuntimeError] = useState("");
   const [workerDraft, setWorkerDraft] = useState(3);
   const [workerSaving, setWorkerSaving] = useState(false);
   const [workerError, setWorkerError] = useState("");
@@ -108,6 +111,25 @@ export function SettingsDownloadClientsSection({
     return () => { cancelled = true; };
   }, []);
 
+  const refreshRuntime = async () => {
+    try {
+      const [status, worker] = await Promise.all([getDownloadRuntimeStatus(), getDownloadWorkerSettings()]);
+      setRuntime(status);
+      setRuntimeError("");
+      const value = Number(worker?.concurrency);
+      if (Number.isInteger(value) && value >= 1 && value <= 10) {
+        setWorkerConcurrency(value);
+        setWorkerDraft(value);
+      } else {
+        setRuntimeError("Could not verify saved worker concurrency.");
+      }
+    } catch (error) {
+      setRuntimeError(error?.message || "Could not read running configuration.");
+    }
+  };
+
+  useEffect(() => { refreshRuntime(); }, []);
+
   const saveWorkerConcurrency = async () => {
     if (!Number.isInteger(workerDraft) || workerDraft < 1 || workerDraft > 10) return;
     setWorkerSaving(true);
@@ -116,7 +138,10 @@ export function SettingsDownloadClientsSection({
       const result = await updateDownloadWorkerSettings(workerDraft);
       const saved = Number(result?.settings?.concurrency);
       if (saved !== workerDraft) throw new Error("Worker rejected the requested concurrency.");
+      const verified = await getDownloadWorkerSettings();
+      if (Number(verified?.concurrency) !== saved) throw new Error("Saved concurrency did not match server readback.");
       setWorkerConcurrency(saved);
+      await refreshRuntime();
       showSuccess(`Aurral download concurrency set to ${saved}.`);
     } catch (error) {
       const message = error.response?.data?.message || error.response?.data?.error || error.message || "Could not update concurrency.";
@@ -307,6 +332,22 @@ export function SettingsDownloadClientsSection({
           ) : null}
         </div>
       </div>
+
+      <SettingsArrFieldSet legend="Running download scheduler">
+        <div className="arr-info" role="status">
+          {runtime ? (
+            <>
+              <p><strong>Scheduler:</strong> {runtime.flags.providerScheduler ? "Provider scheduler ACTIVE" : "Legacy mode"}</p>
+              <p><strong>Acquisition:</strong> {runtime.flags.acquisitionPaused ? "PAUSED — no new downloads" : "Active"}</p>
+              <p><strong>Legacy pipeline consumers:</strong> {runtime.flags.pipelineConsumers}{runtime.flags.providerScheduler ? " (not used in scheduler mode)" : ""}</p>
+              <p><strong>Provider capacity:</strong> {(runtime.scheduler?.providers || []).filter((p) => p.enabled).map((p) => `${p.id}: ${p.active}/${p.maxActive}`).join(" · ") || "Unavailable"}</p>
+              <small>Observed: {runtime.observedAt}. Values reflect the running server, not a pending settings change.</small>
+            </>
+          ) : <p>Running settings not yet verified.</p>}
+          {runtimeError ? <p role="alert">{runtimeError}</p> : null}
+          <button type="button" className="btn btn-secondary" onClick={refreshRuntime}>Refresh running settings</button>
+        </div>
+      </SettingsArrFieldSet>
 
       <SettingsArrFieldSet legend="Download concurrency">
         <SettingsArrFormGroup
