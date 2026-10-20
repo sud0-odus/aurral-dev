@@ -5,6 +5,16 @@ import { SettingsIntegrationModal } from "./SettingsIntegrationCards";
 const readError = (error) => error?.response?.data?.message || error?.response?.data?.error || error.message || "Request failed";
 
 export function AppleMusicPocModal({ onClose }) {
+  const [bridgeStatus, setBridgeStatus] = useState(null);
+  const [bridgeError, setBridgeError] = useState("");
+  const refreshBridge = async () => {
+    try {
+      const result = await getData("/settings/download-clients/runtime");
+      setBridgeStatus(result.applePocBridge);
+      setBridgeError("");
+    } catch (error) { setBridgeError(readError(error)); }
+  };
+  useEffect(() => { refreshBridge(); }, []);
   const [headers, setHeaders] = useState("");
   const [connected, setConnected] = useState(false);
   const [groups, setGroups] = useState([]);
@@ -225,6 +235,13 @@ export function AppleMusicPocModal({ onClose }) {
           <p>Explore personalized Apple Music recommendations and import selected playlists into Aurral.</p>
           <p className="apple-p5__note">One-time import only; automatic synchronization is disabled. Apple sign-in uses the existing Windows applemusic-mcp helper. The temporary bridge keeps request headers in memory for up to one hour.</p>
         </div>
+        <section className="apple-p5__panel" aria-label="Apple Music bridge status">
+          <h4 className="apple-p5__title">Local Apple Music bridge</h4>
+          <p className="apple-p5__note">Service: {bridgeStatus?.state || "Unknown"} · Starts at boot: {bridgeStatus?.enabledAtBoot === null || bridgeStatus == null ? "Unknown" : bridgeStatus.enabledAtBoot ? "Yes" : "No"}</p>
+          <p className="apple-p5__note">This reflects the local systemd service, not Apple Music authentication. Bridge start/stop controls are not available until secure service management is installed.</p>
+          {bridgeError && <p role="alert">{bridgeError}</p>}
+          <button type="button" className="btn btn-secondary apple-p5__button" onClick={refreshBridge}>Refresh bridge status</button>
+        </section>
         <section className="apple-p5__panel" aria-label="Apple Music connection">
           <div className="apple-p5__row" style={{justifyContent:"space-between"}}>
             <h4 className="apple-p5__title">Connection</h4>
