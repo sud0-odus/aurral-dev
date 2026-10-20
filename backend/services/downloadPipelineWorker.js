@@ -14,7 +14,7 @@ import { logger, safeLogDiagnostic } from "./logger.js";
 import { recordAlbumGrabQueued, recordAlbumGrabPhase } from "./albumGrabActivity.js";
 import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { withDownloadPayloadMutation } from "./downloadJobs/mutationGuards.js";
-import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservations, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
+import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservationsCooperatively, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
 
 async function processLockedPipelineJob(payload, dependencies = {}) {
   const processPayload = dependencies.processPipelinePayload || processPipelinePayload;
@@ -73,13 +73,17 @@ const pipelineConsumers = Array.from({ length: 16 }, (_, index) => createHonkerW
     if (!isAnyDownloadSourceConfigured()) return false;
     if (providerSchedulerEnabled()) {
       if (index >= providerSchedulerMaxWorkers()) return false;
-      if (index === 0) reconcilePipelineReservations();
     } else if (index > (process.env.AURRAL_PIPELINE_CONSUMERS === "2" ? 1 : 0)) {
       return false;
     }
     if (index === 0) {
-      void enqueuePendingJobsWithoutBatchCooperatively().catch((error) => {
-        logger.warn("downloads", "Could not recover pending pipeline jobs on startup", {
+      void (async () => {
+        if (providerSchedulerEnabled()) {
+          await reconcilePipelineReservationsCooperatively();
+        }
+        await enqueuePendingJobsWithoutBatchCooperatively();
+      })().catch((error) => {
+        logger.warn("downloads", "Could not recover download pipeline state on startup", {
           reason: error?.message || String(error),
         });
       });
