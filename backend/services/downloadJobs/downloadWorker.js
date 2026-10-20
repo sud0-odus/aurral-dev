@@ -445,21 +445,34 @@ export class DownloadWorker {
 
     this.runGeneration += 1;
     this.running = true;
+    const diag = process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1" &&
+      process.env.AURRAL_BACKGROUND_WORKER_GROUP === "downloads";
+    const trace = (stage) => {
+      if (diag) console.warn("[WorkerDispatchDiag]", JSON.stringify({
+        pid: process.pid, stage, uptimeMs: Math.round(process.uptime() * 1000),
+      }));
+    };
+    trace("pipeline-start-begin");
     startDownloadPipelineWorker();
+    trace("pipeline-start-return");
     console.log("[DownloadWorker] Starting worker...");
 
     this.processLoop = () => {
       if (!this.running) return;
       // CT119: pause new acquisition dispatch without deleting pending jobs.
       if (process.env.AURRAL_CT119_PAUSE_ACQUISITION === "1") return;
+      trace("settings-read-begin");
       const { concurrency: legacyConcurrency } = this.getWorkerSettings();
+      trace("settings-read-return");
       const concurrency = providerSchedulerEnabled() ? providerSchedulerMaxWorkers() : legacyConcurrency;
       while (this.activeCount < concurrency) {
         if (!providerSchedulerEnabled() && this.activeCount + countSearchingPipelineJobs() >= concurrency) {
           this._scheduleProcessIn(SEARCH_SLOT_RECHECK_MS);
           break;
         }
+        trace("pending-job-select-begin");
         const job = this._getNextReadyPendingJob(this.lastDequeuedPlaylistType);
+        trace("pending-job-select-return");
         if (!job) {
           break;
         }
@@ -518,7 +531,9 @@ export class DownloadWorker {
       }
     };
 
+    trace("first-process-loop-begin");
     this.processLoop();
+    trace("first-process-loop-return");
     // One watchdog observes durable queue claims and provider work. A track is
     // requeued only after two consecutive checks show it orphaned.
     if (!this.healthTimer) {

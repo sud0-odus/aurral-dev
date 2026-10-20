@@ -1,25 +1,39 @@
 import { ISOLATED_WORKER_GROUPS, isQueueOwnedByGroup } from "./backgroundWorkerQueues.js";
 import { logger } from "./logger.js";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 
 const group = process.env.AURRAL_BACKGROUND_WORKER_GROUP;
+const startupTrace = group === "downloads" && process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1";
+const traceStart = Date.now();
+const traceStartup = (stage) => {
+  if (startupTrace) console.warn("[WorkerStartupDiag]", JSON.stringify({
+    pid: process.pid, stage, elapsedMs: Date.now() - traceStart,
+  }));
+};
+traceStartup("entry");
 if (!ISOLATED_WORKER_GROUPS.includes(group) || !process.send) {
   throw new Error("Background worker process requires a supervised queue group");
 }
 
 const { startWorkerSupervisor, wakeQueuedBackgroundWork, hasQueuedBackgroundWork } =
   await import("./appRuntime.js");
+traceStartup("appRuntime-imported");
 const { getHonkerWorkerStatuses, getWorkerIdleStopMs, shutdownHonkerInfrastructure } =
   await import("./honkerWorkerRuntime.js");
+traceStartup("honkerWorkerRuntime-imported");
 const { isHonkerScheduleDue } = await import("./honkerDb.js");
+traceStartup("honkerDb-imported");
 const downloadWorker = group === "downloads"
   ? (await import("./downloadJobs/downloadWorker.js")).downloadWorker
   : null;
+traceStartup("downloadWorker-imported");
 const playlistOperationStatus = group === "downloads"
   ? (await import("./playlists/playlistOperationWorker.js")).getPlaylistOperationWorkerStatus
   : null;
 const hasApprovalFollowUps = group === "downloads"
   ? (await import("./downloadJobs/blockedJobReview.js")).hasApprovalFollowUps
   : () => false;
+traceStartup("dependencies-imported");
 
 let stopping = false;
 let ownerCommandsInFlight = 0;
@@ -69,9 +83,14 @@ async function handleDownloadOwnerCommand(message) {
       const { downloadTracker } = await import("./downloadJobs/downloadTracker.js");
       result = downloadTracker.clearPendingByPlaylistType(args[0]);
     } else if (method === "wakeOrStart") {
-      if (downloadWorker.running) downloadWorker.wake(args[0]);
-      else await downloadWorker.start();
-      result = true;
+      traceStartup("wakeOrStart-enter");
+      try {
+        if (downloadWorker.running) downloadWorker.wake(args[0]);
+        else await downloadWorker.start();
+        result = true;
+      } finally {
+        traceStartup("wakeOrStart-return");
+      }
     } else if (method === "runQualityUpgradeChecks") {
       const { runQualityUpgradeCheck } = await import("./qualityProfileService.js");
       const [playlistIds, limit = 500] = args;
@@ -164,22 +183,63 @@ if (group === "scheduler") {
   const { startHonkerTaskCleanup } = await import("./honkerTaskStatus.js");
   await startHonkerTaskCleanup();
 } else {
+  traceStartup("supervisor-start-begin");
   startWorkerSupervisor({ group });
+  traceStartup("supervisor-start-returned");
 }
+traceStartup("ready-send-begin");
 process.send({ type: "ready", group });
+traceStartup("ready-sent");
+// Opt-in bounded diagnostics. No job payloads, keys, names, or settings.
+const heartbeatDiagnostics = group === "downloads" && process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1";
+const loopDelay = heartbeatDiagnostics ? monitorEventLoopDelay({ resolution: 20 }) : null;
+loopDelay?.enable();
+let lastHeartbeatTick = Date.now();
 const heartbeat = setInterval(() => {
+  const started = Date.now();
+  const tickGapMs = started - lastHeartbeatTick;
+  lastHeartbeatTick = started;
+  const durations = {};
+  const timed = (name, fn) => {
+    const t = performance.now();
+    try { return fn(); }
+    finally { durations[name] = Math.round(performance.now() - t); }
+  };
+  if (heartbeatDiagnostics) {
+    const memory = process.memoryUsage();
+    console.warn("[WorkerHeartbeatDiag] tick", JSON.stringify({
+      pid: process.pid, tickGapMs, rssMiB: Math.round(memory.rss / 1048576),
+      heapMiB: Math.round(memory.heapUsed / 1048576),
+      loopDelayMaxMs: Math.round((loopDelay?.max || 0) / 1e6),
+    }));
+    loopDelay?.reset();
+  }
+  try {
   if (process.connected) {
     const downloadOwnerStatus = downloadWorker
-      ? { ...downloadWorker.getStatus(), operationWorker: playlistOperationStatus() }
+      ? timed("downloadStatus", () => ({
+          ...downloadWorker.getStatus(),
+          operationWorker: timed("operationStatus", () => playlistOperationStatus()),
+        }))
       : null;
-    process.send({
+    const workers = timed("honkerStatus", () => getHonkerWorkerStatuses().filter((worker) =>
+      isQueueOwnedByGroup(worker.name, group)));
+    timed("ipcSend", () => process.send({
       type: "heartbeat",
       group,
-      workers: getHonkerWorkerStatuses().filter((worker) =>
-        isQueueOwnedByGroup(worker.name, group)),
+      workers,
       ...(downloadOwnerStatus ? { downloadOwnerStatus } : {}),
-    });
-    if (isIdle()) process.send({ type: "idle" });
+    }));
+    if (timed("idleCheck", () => isIdle())) process.send({ type: "idle" });
+  }
+  } catch (error) {
+    if (heartbeatDiagnostics) console.error("[WorkerHeartbeatDiag] error", error?.message || String(error));
+    throw error;
+  } finally {
+    if (heartbeatDiagnostics) console.warn("[WorkerHeartbeatDiag] complete", JSON.stringify({
+      pid: process.pid, totalMs: Date.now() - started, ...durations,
+    }));
   }
 }, 5000);
 heartbeat.unref?.();
+traceStartup("heartbeat-registered");
