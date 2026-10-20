@@ -77,3 +77,7 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 - Added read-only `reservationClaims` aggregate to existing scheduler stats, grouped by provider ID, job status, and whether an exact Honker `jobId` + `downloadAttemptId` claim exists. No job IDs, titles, payloads or credentials exposed. This helps distinguish a `pending` job with a durable claim from a candidate orphan, but an absent claim alone is **not sufficient** to force release (worker transitions and in-flight operations must be considered).
 - No scheduling, expiration, consumer-count, reservation-release, or provider configuration behavior changed. New stats require CI validation and deployment before visible on CT120.
 - Next: validate SQLite aggregate query with tests (particularly `json_valid` and `_honker_live` schema), then correlate attempt event timeline and provider activity; do not infer actual transfer from claim existence.
+
+## Continued work and validation checkpoint
+- Added `workerCeiling` to read-only scheduler stats. This is the effective configured worker-loop ceiling, **not** the number of active transfers or durable queue claims. The distinction is important when actual job statuses exceed reservation totals.
+- At the latest check, the preceding CI run had not returned a result; the most recent commit must be validated again before deployment.
