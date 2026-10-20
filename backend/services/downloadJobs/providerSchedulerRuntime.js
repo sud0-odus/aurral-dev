@@ -85,6 +85,33 @@ const downloadOutcomeCounts = db.prepare(`
   GROUP BY download_source, status
 `);
 
+// Match the same durable queue claim used by orphan reconciliation, but
+// observe only: an absent claim may reflect an in-flight worker transition.
+const reservationClaimDiagnostics = db.prepare(`
+  SELECT r.provider_id AS provider_id,
+    COALESCE(j.status, 'missing_job') AS job_status,
+    CASE WHEN EXISTS (
+      SELECT 1 FROM _honker_live h
+      WHERE h.queue = 'slskd-pipeline'
+        AND json_valid(h.payload)
+        AND json_extract(h.payload, '$.jobId') = r.job_id
+        AND json_extract(h.payload, '$.downloadAttemptId') = r.attempt_id
+    ) THEN 1 ELSE 0 END AS has_queue_claim,
+    COUNT(*) AS count
+  FROM download_provider_reservations r
+  LEFT JOIN playlist_download_jobs j ON j.id = r.job_id
+  GROUP BY r.provider_id, COALESCE(j.status, 'missing_job'), has_queue_claim
+`);
+
+export function getProviderReservationClaimStats() {
+  return reservationClaimDiagnostics.all().map((row) => ({
+    providerId: row.provider_id,
+    jobStatus: row.job_status,
+    hasQueueClaim: Boolean(row.has_queue_claim),
+    count: row.count,
+  }));
+}
+
 export function getDownloadSourceOutcomeStats() {
   const bySource = new Map();
   for (const row of downloadOutcomeCounts.all()) {
@@ -106,6 +133,7 @@ export function getProviderSchedulerStats() {
     enabled: providerSchedulerEnabled(),
     sampledAt: now,
     sourceOutcomes: getDownloadSourceOutcomeStats(),
+    reservationClaims: getProviderReservationClaimStats(),
     unassignedReservations: ages.get(null) || null,
     providers: getProviderSchedulerCapacity().map((p) => ({
       ...p,
