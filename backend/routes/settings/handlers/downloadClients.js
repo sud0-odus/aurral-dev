@@ -1,3 +1,7 @@
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
 import { validateExternalUrl } from "../../../middleware/urlValidator.js";
 import { getProviderSchedulerStats } from "../../../services/downloadJobs/providerSchedulerRuntime.js";
 import {
@@ -53,6 +57,58 @@ function registerClientTest(router, path, importClient, label, { warning } = {})
 }
 
 export function registerDownloadClients(router) {
+  router.get("/download-clients/runtime", (_req, res) => {
+    // Effective process values: never infer "running" from stored UI preferences.
+    let bridge = { state: "unknown", installed: null, enabledAtBoot: null };
+    try {
+      const active = execFileSync("systemctl", ["is-active", "aurral-apple-poc.service"], {
+        encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      bridge = { state: active, installed: true, enabledAtBoot: null };
+    } catch (error) {
+      const output = String(error.stdout || "").trim();
+      bridge = { state: output || "unknown", installed: output !== "unknown" && output !== "not-found", enabledAtBoot: null };
+    }
+    try {
+      const enabled = execFileSync("systemctl", ["is-enabled", "aurral-apple-poc.service"], {
+        encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      bridge.enabledAtBoot = enabled === "enabled";
+    } catch {
+      // Do not invent startup state when systemd cannot answer.
+    }
+    res.json({
+      observedAt: new Date().toISOString(),
+      controlAvailable: process.env.AURRAL_SERVICE_CONTROL_HELPER === "/usr/local/sbin/aurral-service-control" && existsSync("/usr/local/sbin/aurral-service-control"),
+      scheduler: getProviderSchedulerStats(),
+      flags: {
+        providerScheduler: process.env.AURRAL_PROVIDER_SCHEDULER === "1",
+        acquisitionPaused: process.env.AURRAL_CT119_PAUSE_ACQUISITION === "1",
+        pipelineConsumers: process.env.AURRAL_PIPELINE_CONSUMERS === "2" ? 2 : 1,
+      },
+      applePocBridge: bridge,
+    });
+  });
+
+  router.post("/download-clients/runtime/apply", async (req, res) => {
+    const { feature, enabled } = req.body || {};
+    if (!["scheduler", "apple-poc"].includes(feature) || typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "Invalid service control request" });
+    }
+    const controller = process.env.AURRAL_SERVICE_CONTROL_HELPER;
+    if (controller !== "/usr/local/sbin/aurral-service-control" || !existsSync(controller)) {
+      return res.status(503).json({ error: "Local service controller is not installed" });
+    }
+    try {
+      await execFileAsync(controller, [feature, enabled ? "enable" : "disable"], {
+        timeout: 15000, windowsHide: true, shell: false,
+      });
+      return res.status(202).json({ accepted: true, message: "Change requested; refresh to verify effective runtime state." });
+    } catch {
+      return res.status(502).json({ error: "Service controller failed; runtime change not verified." });
+    }
+  });
+
   router.get("/download-clients/scheduler", (_req, res) => {
     res.json(getProviderSchedulerStats());
   });

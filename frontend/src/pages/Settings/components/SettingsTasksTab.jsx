@@ -415,6 +415,61 @@ function QueueTable({ queue = [], loading = false }) {
   );
 }
 
+
+const QUEUE_STATUS_ORDER = ["running", "queued", "scheduled", "failed", "interrupted", "completed"];
+function QueueSections({ queue = [], loading = false }) {
+  const groups = useMemo(() => {
+    const byStatus = new Map();
+    for (const task of queue) {
+      const status = String(task.status || "unknown").toLowerCase();
+      if (!byStatus.has(status)) byStatus.set(status, []);
+      byStatus.get(status).push(task);
+    }
+    return [...byStatus.entries()].sort(([left], [right]) => {
+      const a = QUEUE_STATUS_ORDER.indexOf(left);
+      const b = QUEUE_STATUS_ORDER.indexOf(right);
+      if (a === -1 && b === -1) return left.localeCompare(right);
+      if (a === -1) return 1;
+      if (b === -1) return -1;
+      return a - b;
+    });
+  }, [queue]);
+  const [expanded, setExpanded] = useState({});
+  if (loading) return <p className="arr-form-help">Loading queue…</p>;
+  if (!queue.length) return <p className="arr-form-help">No queued task records.</p>;
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <p className="arr-form-help">
+        {queue.length.toLocaleString()} task records shown · Grouped by current status · Expand a group to inspect individual tasks.
+      </p>
+      {groups.map(([status, items]) => {
+        const open = expanded[status] === true;
+        const label = STATUS_META[status]?.label || status;
+        const stale = items.filter((item) => item.isStale).length;
+        return (
+          <section key={status} style={{ border: "1px solid var(--aurral-border)", borderRadius: 8, overflow: "hidden" }}>
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={`task-queue-${status.replace(/[^a-z0-9_-]/g, "-")}`}
+              onClick={() => setExpanded((current) => ({ ...current, [status]: !current[status] }))}
+              style={{ width: "100%", padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, textAlign: "left", border: 0, color: "inherit", background: "transparent", cursor: "pointer" }}
+            >
+              <span><StatusBadge status={status} /> <strong>{items.length.toLocaleString()}</strong>{stale ? ` · ${stale} potentially stale` : ""}</span>
+              <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+            </button>
+            {open && (
+              <div id={`task-queue-${status.replace(/[^a-z0-9_-]/g, "-")}`}>
+                <QueueTable queue={items} />
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 export function SettingsTasksTab({ showError, showSuccess }) {
   const [clearing, setClearing] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
@@ -516,7 +571,7 @@ export function SettingsTasksTab({ showError, showSuccess }) {
       </SettingsArrFieldSet>
 
       <SettingsArrFieldSet legend="Queue">
-        <QueueTable queue={tasks?.queue || []} loading={loading} />
+        <QueueSections queue={tasks?.queue || []} loading={loading} />
       </SettingsArrFieldSet>
       <SettingsArrFieldSet legend="Download diagnostics">
         <p className="arr-form-help">Read-only live status. A search waiting in slskd is not automatically a stalled download.</p>
