@@ -88,10 +88,12 @@ const downloadOutcomeCounts = db.prepare(`
 
 // Match the same durable queue claim used by orphan reconciliation, but
 // observe only: an absent claim may reflect an in-flight worker transition.
-const reservationClaimDiagnostics = db.prepare(RESERVATION_CLAIM_STATS_SQL);
-
 export function getProviderReservationClaimStats() {
-  return reservationClaimDiagnostics.all().map((row) => ({
+  // Honker initializes its live queue table separately. In lightweight test
+  // environments it may not exist yet; never fail module initialization.
+  const queueExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_honker_live'").get();
+  if (!queueExists) return [];
+  return db.prepare(RESERVATION_CLAIM_STATS_SQL).all().map((row) => ({
     providerId: row.provider_id,
     jobStatus: row.job_status,
     hasQueueClaim: Boolean(row.has_queue_claim),
