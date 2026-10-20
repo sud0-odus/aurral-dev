@@ -131,3 +131,9 @@ The diagnostics are product-facing foundations, **not** a backend-only troublesh
 - Frontend now exports `fetchProviderSchedulerStats({signal})` from `frontend/src/utils/api/endpoints/settings.js` so a future admin page can poll a single endpoint without duplicating API plumbing.
 - **Not yet built**: charts/cards, historical time series, verified completion attribution and phase latencies. Do not suggest these are live.
 - PR #19 service toggles and Issue #22 modal fix remain separate.
+
+## End-of-session handoff (2026-10-20)
+- Admin statistics are a first-class destination, not solely backend telemetry. Preserve privacy-safe, stable aggregate metrics, explicit timestamps, and clear definitions; implementation of cards/charts and longitudinal rates remains future work.
+- Most recent cleanup: `reservationClaims` is **null** if `_honker_live` does not exist and `[]` if the queue exists but no reservation-claim groups are present. This avoids confusing unavailable telemetry with zero observed claims. Older draft notes referencing `reservationClaimsAvailable` describe a prior intermediate implementation and are superseded.
+- PR #21 remains a draft; no code from this branch deployed to CT120. Latest changes still require CI validation. Preserve scheduler enabled and avoid restarting during the active backlog.
+- Next session: verify full CI on latest commit, fix failures, review read-only queries for efficiency and startup lifecycle, then add integration tests for event aggregation and design the admin Statistics page separately if necessary. Do not advertise throughput/success rate until completion events have reliable attribution and time windows.
