@@ -75,6 +75,25 @@ const reservationDiagnostics = db.prepare(`
   GROUP BY provider_id
 `);
 
+// Source-level outcome counters. These describe job rows, NOT provider-client
+// transfer telemetry. In particular, "usenet" cannot distinguish SABnzbd from
+// NZBGet, and unassigned jobs must remain visible rather than attributed.
+const downloadOutcomeCounts = db.prepare(`
+  SELECT COALESCE(download_source, 'unassigned') AS source,
+    status, COUNT(*) AS count
+  FROM playlist_download_jobs
+  GROUP BY download_source, status
+`);
+
+export function getDownloadSourceOutcomeStats() {
+  const bySource = new Map();
+  for (const row of downloadOutcomeCounts.all()) {
+    if (!bySource.has(row.source)) bySource.set(row.source, {});
+    bySource.get(row.source)[row.status] = row.count;
+  }
+  return [...bySource].map(([source, statuses]) => ({ source, statuses }));
+}
+
 export function getProviderSchedulerStats() {
   const now = Date.now();
   const ages = new Map(reservationDiagnostics.all(now - 15 * 60_000, now - 60 * 60_000)
@@ -86,6 +105,7 @@ export function getProviderSchedulerStats() {
   return {
     enabled: providerSchedulerEnabled(),
     sampledAt: now,
+    sourceOutcomes: getDownloadSourceOutcomeStats(),
     unassignedReservations: ages.get(null) || null,
     providers: getProviderSchedulerCapacity().map((p) => ({
       ...p,
