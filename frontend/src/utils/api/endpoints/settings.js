@@ -61,6 +61,12 @@ export const getDownloadClientSettings = () =>
     staleTime: 30_000,
   });
 
+// Admin-only, read-only data source for the future provider performance page.
+// Snapshot counts describe current jobs and past-hour events; they are not
+// instantaneous transfer rates or verified download success percentages.
+export const fetchProviderSchedulerStats = ({ signal } = {}) =>
+  getData("/settings/download-clients/scheduler", { signal });
+
 export const getDownloadWorkerSettings = () => getData("/playlists/worker/settings");
 export const updateDownloadWorkerSettings = (concurrency) =>
   putData("/playlists/worker/settings", { concurrency });
