@@ -15,6 +15,7 @@ export function AppleMusicPocModal({ onClose }) {
     } catch (error) { setBridgeError(readError(error)); }
   };
   useEffect(() => { refreshBridge(); }, []);
+  const [showConnectionHelp, setShowConnectionHelp] = useState(false);
   const [headers, setHeaders] = useState("");
   const [connected, setConnected] = useState(false);
   const [groups, setGroups] = useState([]);
@@ -233,7 +234,7 @@ export function AppleMusicPocModal({ onClose }) {
       <div className="apple-p5">
         <div className="apple-p5__intro">
           <p>Explore personalized Apple Music recommendations and import selected playlists into Aurral.</p>
-          <p className="apple-p5__note">One-time import only; automatic synchronization is disabled. Apple sign-in uses the existing Windows applemusic-mcp helper. The temporary bridge keeps request headers in memory for up to one hour.</p>
+          <p className="apple-p5__note">One-time import only; automatic synchronization is disabled. Apple sign-in uses an applemusic-mcp helper running on a supported computer or server. The temporary bridge keeps request headers in memory for up to one hour.</p>
         </div>
         <section className="apple-p5__panel" aria-label="Apple Music bridge status">
           <h4 className="apple-p5__title">Local Apple Music bridge</h4>
@@ -249,6 +250,7 @@ export function AppleMusicPocModal({ onClose }) {
           </div>
           {!connected && <>
             <p className="apple-p5__note">Paste the Authorization and Music-User-Token headers as JSON. Do not share them in chat.</p>
+            <button type="button" className="btn btn-secondary apple-p5__button" onClick={() => setShowConnectionHelp(true)}>How to get Apple Music headers</button>
             <textarea className="arr-input" rows={4} autoComplete="off" spellCheck={false} placeholder='{"Authorization":"Bearer ...","Music-User-Token":"..."}' value={headers} onChange={e => setHeaders(e.target.value)} />
             <div className="apple-p5__row"><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || !headers.trim()} onClick={connect}>Connect Apple Music</button></div>
           </>}
@@ -320,6 +322,23 @@ export function AppleMusicPocModal({ onClose }) {
           <div className="apple-p5__row" style={{position:"sticky",bottom:0,background:"var(--aurral-surface)",padding:"7px 0",zIndex:1}}><button className="btn btn-primary apple-p5__button" type="button" disabled={busy || hasMore || !tracks.length || operation != null || matchStatus !== "ready" || existingMatches.length > 0} onClick={importPlaylist}>{operation != null ? `Import queued (operation #${operation})` : "Import playlist into Aurral"}</button></div>
         </section>}
       </div>
+      {showConnectionHelp && (
+        <div role="presentation" style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,.75)", display: "grid", placeItems: "center", padding: 16 }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="apple-headers-guide-title" className="apple-p5__panel" style={{ background: "var(--aurral-surface)", color: "var(--aurral-text)", width: "min(640px,100%)", maxHeight: "85dvh", overflowY: "auto" }}>
+            <h3 id="apple-headers-guide-title" className="apple-p5__title">Get temporary Apple Music headers</h3>
+            <ol style={{ display: "grid", gap: 12, paddingLeft: 24 }}>
+              <li>Run <strong>applemusic-mcp</strong> on a supported platform where you have it installed (for example, a Windows, macOS, or Linux machine if supported by your installation).</li>
+              <li>Sign in to Apple Music in the helper using the Apple account whose playlists you want to import.</li>
+              <li>Run the helper operation <code>get_headers()</code>, then copy the returned <strong>Authorization</strong> and <strong>Music-User-Token</strong> values as a JSON object to your clipboard.</li>
+              <li>Paste that JSON into Aurral's Apple Music connection field and click <strong>Connect Apple Music</strong>. The input is cleared after connection.</li>
+            </ol>
+            <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", padding: 12, border: "1px solid var(--aurral-border)", borderRadius: 8 }}>{'{\n  "Authorization": "Bearer YOUR_TEMPORARY_VALUE",\n  "Music-User-Token": "YOUR_TEMPORARY_VALUE"\n}'}</pre>
+            <p><strong>Expiration:</strong> Aurral retains these headers in the bridge's memory for up to <strong>60 minutes</strong>. Disconnecting or restarting the bridge clears them earlier, and Apple may invalidate them sooner. Obtain fresh headers to reconnect.</p>
+            <p className="apple-p5__note">Do not save or share the headers in chat, screenshots, logs, or source control. Imported playlists remain available after the temporary connection expires.</p>
+            <button type="button" className="btn btn-primary apple-p5__button" onClick={() => setShowConnectionHelp(false)}>Back to connection</button>
+          </section>
+        </div>
+      )}
     </SettingsIntegrationModal>
   );
 }
