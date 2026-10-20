@@ -107,3 +107,9 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 - The existing snapshot can include artist/track names and error details, so **do not expose or publish its raw payload as telemetry**. Keep the new scheduler aggregate response anonymized.
 - Pipeline provider failures already record `attemptId` in `downloadPipeline.js` (`provider_failed`, `fallback`); PR #21 adds the missing `attemptId` on `provider_selected`, enabling consistent timeline correlation after deployment.
 - CI workflow 39370498757: production-container validation succeeded; remaining jobs were in progress at the last observation. Wait for the full suite; do not claim it passed.
+
+## Consolidation with existing event history
+- Added `lastHourProviderEvents` to `getProviderSchedulerStats()`: per-provider event, total occurrences, distinct job IDs, and distinct attempt IDs for `provider_selected`, `provider_failed` and `fallback` from the pre-existing `download_operation_events` table. This **reuses existing persisted audit history** instead of adding a second event logger.
+- All values are aggregate counts; no job names, tokens, event details, or identifiers returned. Historical selection events without attempt IDs correctly count 0 distinct attempts until new instrumented events appear.
+- The pre-existing operational snapshot already consumes `getProviderSchedulerStats()`, so the new aggregate data arrives through that existing composition path without another snapshot implementation. No dispatch or queue mutations.
+- Latest CI still needs to validate this commit. No CT120 deployment.
