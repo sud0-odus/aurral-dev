@@ -83,9 +83,14 @@ async function handleDownloadOwnerCommand(message) {
       const { downloadTracker } = await import("./downloadJobs/downloadTracker.js");
       result = downloadTracker.clearPendingByPlaylistType(args[0]);
     } else if (method === "wakeOrStart") {
-      if (downloadWorker.running) downloadWorker.wake(args[0]);
-      else await downloadWorker.start();
-      result = true;
+      traceStartup("wakeOrStart-enter");
+      try {
+        if (downloadWorker.running) downloadWorker.wake(args[0]);
+        else await downloadWorker.start();
+        result = true;
+      } finally {
+        traceStartup("wakeOrStart-return");
+      }
     } else if (method === "runQualityUpgradeChecks") {
       const { runQualityUpgradeCheck } = await import("./qualityProfileService.js");
       const [playlistIds, limit = 500] = args;
