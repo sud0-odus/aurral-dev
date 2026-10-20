@@ -96,3 +96,7 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 - Workflow run `39370182206` surfaced `SqliteError: no such table: _honker_live` in unit tests. Root cause: PR #21 initially prepared the reservation/claim diagnostic SQL during module initialization, before Honker created its live queue table in some test/startup paths.
 - Fix commit `733f3e98106228019c4145894f857e7936e4799e`: defer preparing/running this SQL until `getProviderReservationClaimStats()` is called and check `sqlite_master` first. If Honker queue is absent, return an empty diagnostic array; this must be interpreted as unavailable, **not zero orphan reservations**.
 - Await CI on the fix before deployment. No CT120 changes.
+
+## CI and diagnostic availability update
+- Corrected CI run 39370349883: production container job passed; remaining validation jobs were still running when last inspected. Do not call the full suite passed until all jobs conclude.
+- Added `reservationClaimsAvailable` to stats so an absent `_honker_live` table is explicitly distinguishable from a real zero-count snapshot. Read-only schema inspection, no scheduler dispatch changes.
