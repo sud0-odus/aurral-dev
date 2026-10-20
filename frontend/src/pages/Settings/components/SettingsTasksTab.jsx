@@ -444,7 +444,6 @@ function QueueSections({ queue = [], loading = false }) {
       </p>
       {groups.map(([status, items]) => {
         const open = expanded[status] === true;
-        const label = STATUS_META[status]?.label || status;
         const stale = items.filter((item) => item.isStale).length;
         return (
           <section key={status} style={{ border: "1px solid var(--aurral-border)", borderRadius: 8, overflow: "hidden" }}>
@@ -453,7 +452,8 @@ function QueueSections({ queue = [], loading = false }) {
               aria-expanded={open}
               aria-controls={`task-queue-${status.replace(/[^a-z0-9_-]/g, "-")}`}
               onClick={() => setExpanded((current) => ({ ...current, [status]: !current[status] }))}
-              style={{ width: "100%", padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, textAlign: "left", border: 0, color: "inherit", background: "transparent", cursor: "pointer" }}
+              className="btn btn-secondary"
+              style={{ width: "100%", padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, textAlign: "left" }}
             >
               <span><StatusBadge status={status} /> <strong>{items.length.toLocaleString()}</strong>{stale ? ` · ${stale} potentially stale` : ""}</span>
               <span aria-hidden="true">{open ? "▾" : "▸"}</span>
