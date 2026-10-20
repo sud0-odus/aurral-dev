@@ -173,7 +173,7 @@ export function reservePipelineProvider(payload) {
       insertReservation.run(payload.jobId, payload.downloadAttemptId, assignment.providerId, now, now);
     }
     if(old?.provider_id!==assignment.providerId) recordDownloadEvent({
-      jobId:payload.jobId,category:"scheduler",event:"provider_selected",provider:assignment.providerId});
+      jobId:payload.jobId,attemptId:payload.downloadAttemptId,category:"scheduler",event:"provider_selected",provider:assignment.providerId});
     return {
       ...payload,
       ...assignment,
