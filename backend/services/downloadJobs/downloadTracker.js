@@ -228,6 +228,9 @@ const selectAllStmt = db.prepare(`SELECT * FROM ${JOBS_TABLE} ORDER BY created_a
 const updatePlaylistTypeStmt = db.prepare(
   `UPDATE ${JOBS_TABLE} SET playlist_type = ?, playlist_id = ? WHERE playlist_type = ?`,
 );
+const legacyRecommendedPlaylistExistsStmt = db.prepare(
+  `SELECT 1 FROM ${JOBS_TABLE} WHERE playlist_type = ? LIMIT 1`,
+);
 const clearSlskdMetaStmt = db.prepare(`
   UPDATE ${JOBS_TABLE}
   SET download_source = NULL,
@@ -705,7 +708,13 @@ export class DownloadTracker {
   }
 
   _load() {
-    updatePlaylistTypeStmt.run("discover", "discover", "recommended");
+    // Legacy playlist migration must not take a SQLite write lock in every
+    // worker process on every startup when there is nothing to migrate.
+    // With concurrent worker initialization this unconditional UPDATE caused
+    // SQLITE_BUSY and killed the downloads child before its first heartbeat.
+    if (legacyRecommendedPlaylistExistsStmt.get("recommended")) {
+      updatePlaylistTypeStmt.run("discover", "discover", "recommended");
+    }
     const rows = selectAllStmt.all();
     for (const row of rows) {
       const job = rowToJob(row);
