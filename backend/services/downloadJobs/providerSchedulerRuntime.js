@@ -63,10 +63,38 @@ export function getProviderSchedulerCapacity() {
   }));
 }
 
+// Read-only diagnostics: age is measured from the original reservation, not
+// the most recent provider switch. Old reservations are candidates for review,
+// NOT permission to release a potentially live download.
+const reservationDiagnostics = db.prepare(`
+  SELECT provider_id, COUNT(*) AS reservations,
+    MIN(created_at) AS oldest_created_at,
+    SUM(CASE WHEN created_at <= ? THEN 1 ELSE 0 END) AS older_than_15m,
+    SUM(CASE WHEN created_at <= ? THEN 1 ELSE 0 END) AS older_than_60m
+  FROM download_provider_reservations
+  GROUP BY provider_id
+`);
+
 export function getProviderSchedulerStats() {
-  return { enabled: providerSchedulerEnabled(), providers: getProviderSchedulerCapacity().map((p) => ({
-    ...p, available: p.enabled ? Math.max(0, p.maxActive - p.active) : 0,
-  })) };
+  const now = Date.now();
+  const ages = new Map(reservationDiagnostics.all(now - 15 * 60_000, now - 60 * 60_000)
+    .map((row) => [row.provider_id, {
+      oldestReservationAgeMs: Math.max(0, now - row.oldest_created_at),
+      olderThan15m: row.older_than_15m,
+      olderThan60m: row.older_than_60m,
+    }]));
+  return {
+    enabled: providerSchedulerEnabled(),
+    sampledAt: now,
+    unassignedReservations: ages.get(null) || null,
+    providers: getProviderSchedulerCapacity().map((p) => ({
+      ...p,
+      available: p.enabled ? Math.max(0, p.maxActive - p.active) : 0,
+      oldestReservationAgeMs: ages.get(p.id)?.oldestReservationAgeMs ?? null,
+      olderThan15m: ages.get(p.id)?.olderThan15m ?? 0,
+      olderThan60m: ages.get(p.id)?.olderThan60m ?? 0,
+    })),
+  };
 }
 
 export function providerSchedulerMaxWorkers() {
