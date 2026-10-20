@@ -64,6 +64,7 @@ export const getDownloadClientSettings = () =>
 export const applyDownloadRuntimeSetting = (feature, enabled) =>
   postData("/settings/download-clients/runtime/apply", { feature, enabled });
 
+export const applyRuntimeSetting = (feature, enabled) => postData("/settings/download-clients/runtime/apply", { feature, enabled });
 export const getDownloadRuntimeStatus = () => getData("/settings/download-clients/runtime");
 
 export const getDownloadWorkerSettings = () => getData("/playlists/worker/settings");
