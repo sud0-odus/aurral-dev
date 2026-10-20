@@ -110,6 +110,28 @@ export function getDownloadSourceOutcomeStats() {
   return [...bySource].map(([source, statuses]) => ({ source, statuses }));
 }
 
+// Aggregate the existing operational event history rather than creating a
+// parallel lifecycle log. Counts are event occurrences, not unique downloads.
+const recentProviderEvents = db.prepare(`
+  SELECT COALESCE(provider, 'unassigned') AS provider, event,
+    COUNT(*) AS count, COUNT(DISTINCT job_id) AS distinctJobs,
+    COUNT(DISTINCT attempt_id) AS distinctAttempts
+  FROM download_operation_events
+  WHERE occurred_at >= ? AND category IN ('provider', 'scheduler')
+    AND event IN ('provider_selected', 'provider_failed', 'fallback')
+  GROUP BY COALESCE(provider, 'unassigned'), event
+`);
+
+export function getRecentProviderEventStats(now = Date.now()) {
+  return recentProviderEvents.all(now - 60 * 60_000).map((row) => ({
+    provider: row.provider,
+    event: row.event,
+    count: row.count,
+    distinctJobs: row.distinctJobs,
+    distinctAttempts: row.distinctAttempts,
+  }));
+}
+
 export function getProviderSchedulerStats() {
   const now = Date.now();
   const ages = new Map(reservationDiagnostics.all(now - 15 * 60_000, now - 60 * 60_000)
@@ -124,6 +146,7 @@ export function getProviderSchedulerStats() {
     // The worker ceiling is a configured upper bound, not active transfers.
     workerCeiling: providerSchedulerMaxWorkers(),
     sourceOutcomes: getDownloadSourceOutcomeStats(),
+    lastHourProviderEvents: getRecentProviderEventStats(now),
     reservationClaimsAvailable: Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_honker_live'").get()),
     reservationClaims: getProviderReservationClaimStats(),
     unassignedReservations: ages.get(null) || null,
