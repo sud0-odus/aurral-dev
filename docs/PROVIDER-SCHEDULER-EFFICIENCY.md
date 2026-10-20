@@ -91,3 +91,8 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 - `.tests/download/provider-scheduler-reservation-query.test.js` now creates an in-memory `better-sqlite3` database and runs the exact production aggregate SQL against four synthetic reservations. It tests an exact match, wrong attempt ID, wrong Honker queue, malformed JSON, and a missing job row; asserts grouped claim/no-claim counts and total conservation.
 - This tests **SQL behavior**, not live Honker worker hand-off timing or actual provider download transfers. No live job state is changed.
 - Test execution is subject to CI; deployment must wait for the branch's latest CI result.
+
+## CI regression and mitigation (2026-10-19 local / 2026-10-20 UTC)
+- Workflow run `39370182206` surfaced `SqliteError: no such table: _honker_live` in unit tests. Root cause: PR #21 initially prepared the reservation/claim diagnostic SQL during module initialization, before Honker created its live queue table in some test/startup paths.
+- Fix commit `733f3e98106228019c4145894f857e7936e4799e`: defer preparing/running this SQL until `getProviderReservationClaimStats()` is called and check `sqlite_master` first. If Honker queue is absent, return an empty diagnostic array; this must be interpreted as unavailable, **not zero orphan reservations**.
+- Await CI on the fix before deployment. No CT120 changes.
