@@ -110,6 +110,9 @@ export function createBackgroundProcessSupervisor({
       scheduleRestart(group);
       return;
     }
+    if (group === "downloads" && process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1") {
+      logger.warn?.("[WorkerStartupDiag] forked", JSON.stringify({ pid: child.pid }));
+    }
     children.set(group, child);
     lastSeen.set(group, Date.now());
     const startedAt = Date.now();
@@ -134,6 +137,11 @@ export function createBackgroundProcessSupervisor({
         return;
       }
       if (message?.type === "ready") {
+        if (group === "downloads" && process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1") {
+          logger.warn?.("[WorkerStartupDiag] ready-received", JSON.stringify({
+            pid: child.pid, elapsedMs: Date.now() - startedAt,
+          }));
+        }
         readyGroups.add(group);
         flushRequests(group);
       }
