@@ -6,15 +6,32 @@ const readError = (error) => error?.response?.data?.message || error?.response?.
 
 export function AppleMusicPocModal({ onClose }) {
   const [bridgeStatus, setBridgeStatus] = useState(null);
+  const [bridgeControlAvailable, setBridgeControlAvailable] = useState(false);
+  const [bridgeBusy, setBridgeBusy] = useState(false);
+  const [bridgeNotice, setBridgeNotice] = useState("");
   const [bridgeError, setBridgeError] = useState("");
   const refreshBridge = async () => {
     try {
       const result = await getData("/settings/download-clients/runtime");
       setBridgeStatus(result.applePocBridge);
+      setBridgeControlAvailable(result.controlAvailable === true);
       setBridgeError("");
     } catch (error) { setBridgeError(readError(error)); }
   };
   useEffect(() => { refreshBridge(); }, []);
+  const changeBridge = async () => {
+    if (!bridgeControlAvailable || bridgeBusy) return;
+    const enabled = bridgeStatus?.state !== "active";
+    if (!window.confirm(`${enabled ? "Enable" : "Disable"} local Apple Music bridge?`)) return;
+    setBridgeBusy(true);
+    setBridgeNotice("");
+    try {
+      const result = await postData("/settings/download-clients/runtime/apply", { feature: "apple-poc", enabled });
+      setBridgeNotice(result.message || "Requested change. Verify actual service state.");
+      await refreshBridge();
+    } catch (error) { setBridgeNotice(readError(error)); }
+    finally { setBridgeBusy(false); }
+  };
   const [showConnectionHelp, setShowConnectionHelp] = useState(false);
   const [headers, setHeaders] = useState("");
   const [connected, setConnected] = useState(false);
@@ -242,6 +259,11 @@ export function AppleMusicPocModal({ onClose }) {
           <p className="apple-p5__note">This reflects the local systemd service, not Apple Music authentication. Bridge start/stop controls are not available until secure service management is installed.</p>
           {bridgeError && <p role="alert">{bridgeError}</p>}
           <button type="button" className="btn btn-secondary apple-p5__button" onClick={refreshBridge}>Refresh bridge status</button>
+          <button type="button" className="btn btn-secondary apple-p5__button" disabled={!bridgeControlAvailable || bridgeBusy} onClick={changeBridge}>
+            {bridgeBusy ? "Applying..." : bridgeStatus?.state === "active" ? "Disable bridge" : "Enable bridge"}
+          </button>
+          {!bridgeControlAvailable && <p className="apple-p5__note">Service controls are unavailable until the local controller is installed.</p>}
+          {bridgeNotice && <p role="status">{bridgeNotice}</p>
         </section>
         <section className="apple-p5__panel" aria-label="Apple Music connection">
           <div className="apple-p5__row" style={{justifyContent:"space-between"}}>
