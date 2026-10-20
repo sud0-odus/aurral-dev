@@ -61,6 +61,8 @@ export const getDownloadClientSettings = () =>
     staleTime: 30_000,
   });
 
+export const getDownloadRuntimeStatus = () => getData("/settings/download-clients/runtime");
+
 export const getDownloadWorkerSettings = () => getData("/playlists/worker/settings");
 export const updateDownloadWorkerSettings = (concurrency) =>
   putData("/playlists/worker/settings", { concurrency });
