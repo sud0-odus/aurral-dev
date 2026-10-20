@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 import { validateExternalUrl } from "../../../middleware/urlValidator.js";
@@ -78,7 +79,7 @@ export function registerDownloadClients(router) {
     }
     res.json({
       observedAt: new Date().toISOString(),
-      controlAvailable: Boolean(process.env.AURRAL_SERVICE_CONTROL_HELPER),
+      controlAvailable: process.env.AURRAL_SERVICE_CONTROL_HELPER === "/usr/local/sbin/aurral-service-control" && existsSync("/usr/local/sbin/aurral-service-control"),
       scheduler: getProviderSchedulerStats(),
       flags: {
         providerScheduler: process.env.AURRAL_PROVIDER_SCHEDULER === "1",
@@ -95,8 +96,8 @@ export function registerDownloadClients(router) {
       return res.status(400).json({ error: "Invalid service control request" });
     }
     const controller = process.env.AURRAL_SERVICE_CONTROL_HELPER;
-    if (!controller || !controller.startsWith("/") || !/^\\/[a-zA-Z0-9/_-]+$/.test(controller)) {
-      return res.status(503).json({ error: "Local service controller is not configured" });
+    if (controller !== "/usr/local/sbin/aurral-service-control" || !existsSync(controller)) {
+      return res.status(503).json({ error: "Local service controller is not installed" });
     }
     try {
       await execFileAsync(controller, [feature, enabled ? "enable" : "disable"], {
