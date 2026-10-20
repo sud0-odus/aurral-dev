@@ -81,3 +81,8 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 ## Continued work and validation checkpoint
 - Added `workerCeiling` to read-only scheduler stats. This is the effective configured worker-loop ceiling, **not** the number of active transfers or durable queue claims. The distinction is important when actual job statuses exceed reservation totals.
 - At the latest check, the preceding CI run had not returned a result; the most recent commit must be validated again before deployment.
+
+## Latest development checkpoint — regression coverage
+- Extracted the aggregate read-only reservation/claim SQL to `backend/services/downloadJobs/providerSchedulerReservationQuery.js`; runtime imports the shared query unchanged.
+- Added `.tests/download/provider-scheduler-reservation-query.test.js` asserting exact `jobId`/`downloadAttemptId` matching, valid JSON guard, pipeline queue scoping, and no write statements. This is a **structural regression test**, not a live-SQLite fixture or proof of correct runtime queue state.
+- Latest CI result must be checked at the new branch head. No changes deployed to CT120.
