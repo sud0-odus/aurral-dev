@@ -54,3 +54,20 @@ Keep CT120 scheduled downloading active; do not enable Deemix or NZBGet; preserv
 - Prior queue snapshot had DMM zero completed, Usenet zero completed, slskd 23 done, yt-dlp 25 done. Different snapshot timestamps; do not treat these counts as an exact synchronized sample.
 - Interpretation: all four providers have five reserved slots, and DMM/SABnzbd selection activity is high despite no observed completions. Distinguish repeated selections/retries/fallbacks from normal multi-stage work before changing scheduling behavior. A 30m reservation can be productive (slskd), so do **not** auto-expire by age.
 - Next targeted investigation: correlate recent `provider_selected` events by distinct `job_id`/`attempt_id`, lifecycle outcomes by source and elapsed age, and read-only provider queue state. Confirm effective maxActive configuration and how reservations release. Avoid exposing track names or credentials.
+
+## Latest distinct-selection and reservation-state evidence (CT120 user snapshot)
+Last-hour scheduler selection events:
+| Provider | Events | Distinct job IDs | Distinct attempt IDs |
+| --- | ---: | ---: | ---: |
+| dmm | 85 | 74 | 0 |
+| sabnzbd | 49 | 49 | 0 |
+| slskd | 18 | 18 | 0 |
+| ytdlp | 28 | 28 | 0 |
+
+- A count of zero distinct attempt IDs means the recorded `provider_selected` events lack `attempt_id` metadata. It does **not** mean zero attempts ran. PR #21 now populates `attemptId: payload.downloadAttemptId` when recording future selections; older rows will remain null.
+- Reservation by job status: DMM 5 pending; SABnzbd 4 downloading/1 pending; slskd 4 downloading/1 pending; yt-dlp 5 downloading. A reservation attached to a pending job is not automatically invalid: verify Honker queue/attempt state and pipeline lifecycle first.
+- DMM selected 74 different jobs during the window but had 0 attributed completions in the previous snapshot; investigate its outcome path, retries and source attribution instead of presuming attempts are stuck. SABnzbd likewise selected 49 distinct jobs with no attributed completed Usenet jobs in the previous snapshot.
+- No scheduler dispatch or reservation lifecycle behavior changed. The extra event field is append-only metadata, best-effort, and only applies after a future deployment.
+
+### Next measurement needed
+Read-only, aggregate queries to correlate `download_provider_reservations` with Honker claims and download job states; then inspect provider-specific completion/fallback events and queue health (without titles, tokens or full request payloads). Diagnose missing completion path before implementing limits, expiring reservations or retry logic.
