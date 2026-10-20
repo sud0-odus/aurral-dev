@@ -132,6 +132,27 @@ export function getRecentProviderEventStats(now = Date.now()) {
   }));
 }
 
+// Durable event counts by fixed, explicit window. 'done' is a track-job
+// completion, not a provider-client transfer. No guessed attempt success rate.
+const historicalOutcomeEvents = db.prepare(`
+  SELECT COALESCE(provider, 'unassigned') AS provider, event,
+    COUNT(*) AS count, COUNT(DISTINCT job_id) AS distinctJobs
+  FROM download_operation_events
+  WHERE occurred_at >= ? AND event IN ('done', 'failed')
+  GROUP BY COALESCE(provider, 'unassigned'), event
+`);
+
+export function getProviderHistoricalOutcomes(now = Date.now()) {
+  return [1, 24, 168].map((hours) => ({
+    hours,
+    from: now - hours * 3_600_000,
+    to: now,
+    outcomes: historicalOutcomeEvents.all(now - hours * 3_600_000).map((r) => ({
+      provider: r.provider, event: r.event, count: r.count, distinctJobs: r.distinctJobs,
+    })),
+  }));
+}
+
 export function getProviderSchedulerStats() {
   const now = Date.now();
   const ages = new Map(reservationDiagnostics.all(now - 15 * 60_000, now - 60 * 60_000)
@@ -147,6 +168,7 @@ export function getProviderSchedulerStats() {
     workerCeiling: providerSchedulerMaxWorkers(),
     sourceOutcomes: getDownloadSourceOutcomeStats(),
     lastHourProviderEvents: getRecentProviderEventStats(now),
+    historicalOutcomes: getProviderHistoricalOutcomes(now),
     // Null means unavailable; [] means available with no matching claims.
     reservationClaims: getProviderReservationClaimStats(),
     unassignedReservations: ages.get(null) || null,

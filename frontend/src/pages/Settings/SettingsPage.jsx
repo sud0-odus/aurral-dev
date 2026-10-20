@@ -14,6 +14,7 @@ import { LidarrSettingsSection } from "./components/LidarrSettingsModalContent";
 import { SettingsIndexersSection } from "./components/SettingsIndexersSection";
 import { SettingsDownloadClientsSection } from "./components/SettingsDownloadClientsSection";
 import { SettingsTasksTab } from "./components/SettingsTasksTab";
+import { SettingsProviderStatsTab } from "./components/SettingsProviderStatsTab";
 import { SettingsLibraryFilesTab } from "./components/SettingsLibraryFilesTab";
 import { SettingsPlaybackTab } from "./components/SettingsPlaybackTab";
 import { SettingsConnectTab } from "./components/SettingsConnectTab";
@@ -147,6 +148,8 @@ function SettingsPage() {
         return (
           <SettingsLibraryFilesTab showError={showError} />
         );
+      case "provider-stats":
+        return <SettingsProviderStatsTab />;
       case "tasks":
         return <SettingsTasksTab showError={showError} showSuccess={showSuccess} />;
       case "playback":
