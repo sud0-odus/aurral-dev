@@ -224,6 +224,13 @@ export function startBackgroundWorkers({ logger = console } = {}) {
     return false;
   }
   backgroundWorkersStarted = true;
+  // Emergency read-only API mode: avoid claiming/recovering queued work or
+  // starting child worker processes while diagnosing resource exhaustion.
+  // Opt-in only; default startup behavior is unchanged.
+  if (process.env.AURRAL_API_ONLY_RECOVERY === "1") {
+    logger.warn?.("[AppRuntime] API-only recovery mode enabled; background workers and queue recovery disabled");
+    return true;
+  }
   recoverJobsClaimedBeforeStart(logger).catch((error) => {
     logger.warn?.("[AppRuntime] Could not recover jobs from before the restart:", error?.message || error);
   });
