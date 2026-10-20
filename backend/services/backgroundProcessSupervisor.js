@@ -114,7 +114,15 @@ export function createBackgroundProcessSupervisor({
     lastSeen.set(group, Date.now());
     const startedAt = Date.now();
     child.on("message", (message) => {
-      lastSeen.set(group, Date.now());
+      const now = Date.now();
+      const priorSeen = lastSeen.get(group) || now;
+      lastSeen.set(group, now);
+      if (group === "downloads" && process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1" &&
+          message?.type === "heartbeat") {
+        logger.warn?.("[WorkerHeartbeatDiag] received", JSON.stringify({
+          pid: child.pid, messageGapMs: now - priorSeen,
+        }));
+      }
       if (message?.type === "idle") {
         retire(group, child);
         return;
@@ -249,6 +257,12 @@ export function createBackgroundProcessSupervisor({
           ? `${group} ${job.queue || "worker"} job ${job.jobId} timed out`
           : `${group} worker stopped responding`;
         exitReasons.set(group, reason);
+        if (group === "downloads" && process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1") {
+          logger.error?.("[WorkerHeartbeatDiag] watchdog", JSON.stringify({
+            pid: child.pid, sinceMessageMs: Date.now() - (lastSeen.get(group) || 0),
+            activeJobCount: activeJobs.get(group)?.size || 0,
+          }));
+        }
         logger.error?.(`[BackgroundWorkers] ${reason}; restarting its worker`);
         lastSeen.set(group, Date.now());
         activeJobs.delete(group);

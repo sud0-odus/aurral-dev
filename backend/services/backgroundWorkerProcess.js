@@ -1,5 +1,6 @@
 import { ISOLATED_WORKER_GROUPS, isQueueOwnedByGroup } from "./backgroundWorkerQueues.js";
 import { logger } from "./logger.js";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 
 const group = process.env.AURRAL_BACKGROUND_WORKER_GROUP;
 if (!ISOLATED_WORKER_GROUPS.includes(group) || !process.send) {
@@ -167,19 +168,55 @@ if (group === "scheduler") {
   startWorkerSupervisor({ group });
 }
 process.send({ type: "ready", group });
+// Opt-in bounded diagnostics. No job payloads, keys, names, or settings.
+const heartbeatDiagnostics = group === "downloads" && process.env.AURRAL_DIAG_WORKER_HEARTBEAT === "1";
+const loopDelay = heartbeatDiagnostics ? monitorEventLoopDelay({ resolution: 20 }) : null;
+loopDelay?.enable();
+let lastHeartbeatTick = Date.now();
 const heartbeat = setInterval(() => {
+  const started = Date.now();
+  const tickGapMs = started - lastHeartbeatTick;
+  lastHeartbeatTick = started;
+  const durations = {};
+  const timed = (name, fn) => {
+    const t = performance.now();
+    try { return fn(); }
+    finally { durations[name] = Math.round(performance.now() - t); }
+  };
+  if (heartbeatDiagnostics) {
+    const memory = process.memoryUsage();
+    console.warn("[WorkerHeartbeatDiag] tick", JSON.stringify({
+      pid: process.pid, tickGapMs, rssMiB: Math.round(memory.rss / 1048576),
+      heapMiB: Math.round(memory.heapUsed / 1048576),
+      loopDelayMaxMs: Math.round((loopDelay?.max || 0) / 1e6),
+    }));
+    loopDelay?.reset();
+  }
+  try {
   if (process.connected) {
     const downloadOwnerStatus = downloadWorker
-      ? { ...downloadWorker.getStatus(), operationWorker: playlistOperationStatus() }
+      ? timed("downloadStatus", () => ({
+          ...downloadWorker.getStatus(),
+          operationWorker: timed("operationStatus", () => playlistOperationStatus()),
+        }))
       : null;
-    process.send({
+    const workers = timed("honkerStatus", () => getHonkerWorkerStatuses().filter((worker) =>
+      isQueueOwnedByGroup(worker.name, group)));
+    timed("ipcSend", () => process.send({
       type: "heartbeat",
       group,
-      workers: getHonkerWorkerStatuses().filter((worker) =>
-        isQueueOwnedByGroup(worker.name, group)),
+      workers,
       ...(downloadOwnerStatus ? { downloadOwnerStatus } : {}),
-    });
-    if (isIdle()) process.send({ type: "idle" });
+    }));
+    if (timed("idleCheck", () => isIdle())) process.send({ type: "idle" });
+  }
+  } catch (error) {
+    if (heartbeatDiagnostics) console.error("[WorkerHeartbeatDiag] error", error?.message || String(error));
+    throw error;
+  } finally {
+    if (heartbeatDiagnostics) console.warn("[WorkerHeartbeatDiag] complete", JSON.stringify({
+      pid: process.pid, totalMs: Date.now() - started, ...durations,
+    }));
   }
 }, 5000);
 heartbeat.unref?.();
