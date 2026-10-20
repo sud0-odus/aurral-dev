@@ -113,3 +113,21 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 - All values are aggregate counts; no job names, tokens, event details, or identifiers returned. Historical selection events without attempt IDs correctly count 0 distinct attempts until new instrumented events appear.
 - The pre-existing operational snapshot already consumes `getProviderSchedulerStats()`, so the new aggregate data arrives through that existing composition path without another snapshot implementation. No dispatch or queue mutations.
 - Latest CI still needs to validate this commit. No CT120 deployment.
+
+## Future admin-facing Provider Performance / Statistics page (product requirement)
+The diagnostics are product-facing foundations, **not** a backend-only troubleshooting feature. Users and admins should understand which provider succeeds, which does not, when performance changes, and why—without reading logs.
+
+### Proposed UX and metric contract
+- **Admin Stats page**, linked from Settings/Tasks or Downloads, initially with provider summary cards/table: configured/enabled, maxActive, reserved, available, oldest reservation, count >15m and >60m, current source job-status counts, last-hour provider-selected/failed/fallback counts, and diagnostic availability indicator. Clearly label *reservation* vs *actual transfer*.
+- **Time windows**: 1h/24h/7d (future work); history must use durable event timestamps and bounded aggregation, not only an in-memory process. A single current snapshot cannot demonstrate historical trends or success rates.
+- **Reliability**: successes, failures, retries, fallback, latency percentiles, queue wait and phase durations, with denominators based on unique attempt IDs; distinguish track source (`usenet`) from underlying client (`sabnzbd` vs `nzbget`). Current job rows alone cannot provide accurate provider-attributed completion rates.
+- **Explainability**: reasons grouped as auth, timeout, no match, quality/validation, network, rate limiting, fallback; mark unknown explicitly, and avoid treating scheduled jobs as completed transfers.
+- **User scope**: admin-only for cross-user/provider details now; later consider privacy-safe per-user overview without identifiers or credentials.
+- **Performance**: bounded indexed aggregate queries, stable named API fields with sampledAt and explicit null/unavailable distinctions; request cancellation and graceful offline states in frontend. Keep raw event details and track names out of aggregate API.
+- **No tuning by heuristics until validation**: surface operational insight first; any adaptive scheduling must have separate controls and evidence of improved completion throughput without rising failure rates.
+
+### Current implementation towards that future
+- Existing admin-authenticated GET `/settings/download-clients/scheduler` returns scheduler stats. Existing operational snapshot consumes the same stats, avoiding duplicate collectors.
+- Frontend now exports `fetchProviderSchedulerStats({signal})` from `frontend/src/utils/api/endpoints/settings.js` so a future admin page can poll a single endpoint without duplicating API plumbing.
+- **Not yet built**: charts/cards, historical time series, verified completion attribution and phase latencies. Do not suggest these are live.
+- PR #19 service toggles and Issue #22 modal fix remain separate.
