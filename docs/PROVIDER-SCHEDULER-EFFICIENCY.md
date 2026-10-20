@@ -25,10 +25,12 @@ Improve productive concurrency without indiscriminately increasing job slots or 
 ## What's new in this draft
 - `getProviderSchedulerStats()` now exposes read-only `sampledAt` and per-provider `oldestReservationAgeMs`, `olderThan15m`, `olderThan60m`; also `unassignedReservations` for delayed provider selections.
 - These are **candidate diagnostic signals**, not proof of an unhealthy job. The old reservation timestamp continues across phases, so age alone must never trigger forced release.
+- Also reports `sourceOutcomes` aggregated from `playlist_download_jobs` by `download_source` and status. This reveals queue outcomes alongside reservation utilization but does **not** measure actual active client transfers or elapsed throughput. `usenet` cannot be attributed to a specific client; `unassigned` is kept explicit.
+- Existing admin settings route `GET /settings/download-clients/scheduler` already returns `getProviderSchedulerStats()` (check mounting prefix in live API before calling); no new routes or permissions added.
 - No DB schema migration, no new provider commands, no queue mutation, no scheduler capacity change, no CT120 deployment.
 
 ## Validation / next steps
-1. Run existing Node unit/integration tests and lint in CI. Investigate any failures before deployment.
+1. Initial PR #21 CI passed at commit `9f54fcbe`; rerun CI for subsequent commits, including source outcomes. Investigate any failures before deployment.
 2. Expose or consume the augmented scheduler stats in a safe admin-only surface with no credentials/job names. Check existing download-clients runtime API from separate PR #19 before selecting route to avoid conflicts.
 3. Add exact attempt phase/time metrics (search, provider wait, transfer, post-process), completion throughput, and failure reasons; do not infer phase from provider reservation alone.
 4. Compare live 15m/60m ages, queue claims and provider client health. Determine whether DMM/SABnzbd work is blocked, merely searching, or failing before adjusting limits.
