@@ -531,7 +531,7 @@ export class DownloadWorker {
     this.processLoop();
     // One watchdog observes durable queue claims and provider work. A track is
     // requeued only after two consecutive checks show it orphaned.
-    if (!this.healthTimer) {
+    if (process.env.AURRAL_DISABLE_ORPHAN_WATCHDOG !== "1" && !this.healthTimer) {
       this.healthTimer = setInterval(() => {
         if (!this.running) return;
         void this.checkDownloadHealth().catch(error =>
