@@ -124,6 +124,7 @@ export function getProviderSchedulerStats() {
     // The worker ceiling is a configured upper bound, not active transfers.
     workerCeiling: providerSchedulerMaxWorkers(),
     sourceOutcomes: getDownloadSourceOutcomeStats(),
+    reservationClaimsAvailable: Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_honker_live'").get()),
     reservationClaims: getProviderReservationClaimStats(),
     unassignedReservations: ages.get(null) || null,
     providers: getProviderSchedulerCapacity().map((p) => ({
