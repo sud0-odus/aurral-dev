@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   getDownloadWorkerSettings,
   getDownloadRuntimeStatus,
+  applyRuntimeSetting,
   updateDownloadWorkerSettings,
   testDownloadClientConnection,
 } from "../../../utils/api/endpoints/settings.js";
@@ -79,6 +80,8 @@ export function SettingsDownloadClientsSection({
 }) {
   const [workerConcurrency, setWorkerConcurrency] = useState(null);
   const [runtime, setRuntime] = useState(null);
+  const [schedulerBusy, setSchedulerBusy] = useState(false);
+  const [schedulerNotice, setSchedulerNotice] = useState("");
   const [runtimeError, setRuntimeError] = useState("");
   const [workerDraft, setWorkerDraft] = useState(3);
   const [workerSaving, setWorkerSaving] = useState(false);
@@ -129,6 +132,20 @@ export function SettingsDownloadClientsSection({
   };
 
   useEffect(() => { refreshRuntime(); }, []);
+
+  const changeScheduler = async () => {
+    if (!runtime?.controlAvailable || schedulerBusy) return;
+    const enabled = !runtime.flags.providerScheduler;
+    if (!window.confirm("Change scheduler mode? Active downloads may restart.")) return;
+    setSchedulerBusy(true);
+    setSchedulerNotice("");
+    try {
+      await applyRuntimeSetting("scheduler", enabled);
+      setSchedulerNotice("Change requested. Refresh after the service restarts to verify running state.");
+    } catch (error) {
+      setSchedulerNotice(error?.response?.data?.error || error?.message || "Could not apply change.");
+    } finally { setSchedulerBusy(false); }
+  };
 
   const saveWorkerConcurrency = async () => {
     if (!Number.isInteger(workerDraft) || workerDraft < 1 || workerDraft > 10) return;
@@ -346,6 +363,11 @@ export function SettingsDownloadClientsSection({
           ) : <p>Running settings not yet verified.</p>}
           {runtimeError ? <p role="alert">{runtimeError}</p> : null}
           <button type="button" className="btn btn-secondary" onClick={refreshRuntime}>Refresh running settings</button>
+          <button type="button" className="btn btn-secondary" disabled={!runtime?.controlAvailable || schedulerBusy} onClick={changeScheduler}>
+            {schedulerBusy ? "Applying..." : runtime?.flags?.providerScheduler ? "Disable provider scheduler" : "Enable provider scheduler"}
+          </button>
+          {!runtime?.controlAvailable && <p>Service control is not installed.</p>}
+          {schedulerNotice && <p role="status">{schedulerNotice}</p>
         </div>
       </SettingsArrFieldSet>
 
