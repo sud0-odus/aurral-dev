@@ -71,3 +71,9 @@ Last-hour scheduler selection events:
 
 ### Next measurement needed
 Read-only, aggregate queries to correlate `download_provider_reservations` with Honker claims and download job states; then inspect provider-specific completion/fallback events and queue health (without titles, tokens or full request payloads). Diagnose missing completion path before implementing limits, expiring reservations or retry logic.
+
+## Work continued — Honker claim correlation
+- Traced `backend/services/downloadPipelineWorker.js`: each of 16 potential consumers obtains a durable Honker queue job. Active consumers are capped by `providerSchedulerMaxWorkers()`; `processPipelineJob()` reserves a provider for non-manual selections. When reservation is unavailable, it requeues with a 2-second delay. On terminal pipeline output it releases the reservation; on permanent failure `onFinalFailure` releases and marks failed. Reconciliation at first consumer startup validates claim existence.
+- Added read-only `reservationClaims` aggregate to existing scheduler stats, grouped by provider ID, job status, and whether an exact Honker `jobId` + `downloadAttemptId` claim exists. No job IDs, titles, payloads or credentials exposed. This helps distinguish a `pending` job with a durable claim from a candidate orphan, but an absent claim alone is **not sufficient** to force release (worker transitions and in-flight operations must be considered).
+- No scheduling, expiration, consumer-count, reservation-release, or provider configuration behavior changed. New stats require CI validation and deployment before visible on CT120.
+- Next: validate SQLite aggregate query with tests (particularly `json_valid` and `_honker_live` schema), then correlate attempt event timeline and provider activity; do not infer actual transfer from claim existence.
