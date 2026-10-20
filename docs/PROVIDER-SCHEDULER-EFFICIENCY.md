@@ -86,3 +86,8 @@ Read-only, aggregate queries to correlate `download_provider_reservations` with 
 - Extracted the aggregate read-only reservation/claim SQL to `backend/services/downloadJobs/providerSchedulerReservationQuery.js`; runtime imports the shared query unchanged.
 - Added `.tests/download/provider-scheduler-reservation-query.test.js` asserting exact `jobId`/`downloadAttemptId` matching, valid JSON guard, pipeline queue scoping, and no write statements. This is a **structural regression test**, not a live-SQLite fixture or proof of correct runtime queue state.
 - Latest CI result must be checked at the new branch head. No changes deployed to CT120.
+
+## In-memory SQLite integration fixture added
+- `.tests/download/provider-scheduler-reservation-query.test.js` now creates an in-memory `better-sqlite3` database and runs the exact production aggregate SQL against four synthetic reservations. It tests an exact match, wrong attempt ID, wrong Honker queue, malformed JSON, and a missing job row; asserts grouped claim/no-claim counts and total conservation.
+- This tests **SQL behavior**, not live Honker worker hand-off timing or actual provider download transfers. No live job state is changed.
+- Test execution is subject to CI; deployment must wait for the branch's latest CI result.
