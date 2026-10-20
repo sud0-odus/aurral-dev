@@ -132,6 +132,8 @@ export function getProviderSchedulerStats() {
   return {
     enabled: providerSchedulerEnabled(),
     sampledAt: now,
+    // The worker ceiling is a configured upper bound, not active transfers.
+    workerCeiling: providerSchedulerMaxWorkers(),
     sourceOutcomes: getDownloadSourceOutcomeStats(),
     reservationClaims: getProviderReservationClaimStats(),
     unassignedReservations: ages.get(null) || null,
