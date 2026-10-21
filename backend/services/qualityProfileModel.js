@@ -12,6 +12,7 @@ export const QUALITY_TIERS = [
   { id: "mp3-192", label: "MP3 192", family: "mp3", bitrate: 192 },
   { id: "m4a-192", label: "M4A 192", family: "m4a", bitrate: 192 },
   { id: "opus-128", label: "Opus 128", family: "opus", bitrate: 128 },
+  { id: "opus-96", label: "Opus 96", family: "opus", bitrate: 96 },
   { id: "mp3-128", label: "MP3 128", family: "mp3", bitrate: 128 },
   { id: "m4a-128", label: "M4A 128", family: "m4a", bitrate: 128 },
 ];
@@ -36,7 +37,7 @@ export function createDefaultQualityProfile(slskd = {}) {
     order,
     enabled: strict
       ? preferredIds
-      : QUALITY_TIERS.map((tier) => tier.id),
+      : QUALITY_TIERS.filter((tier) => tier.family !== "opus").map((tier) => tier.id),
     cutoff: preferred === "mp3" ? "mp3-320" : "flac-standard",
     automaticUpgrades: false,
     intervalDays: 2,
@@ -123,8 +124,8 @@ export function classifyAudioQuality(parsed, filePath) {
   if (family === "flac" && Number.isFinite(sampleRate) && Number.isFinite(bitDepth)) {
     tier = bitDepth > 16 || sampleRate > 48000 ? "flac-hires" : "flac-standard";
   } else if (family === "opus") {
-    tier = Number.isFinite(bitrateKbps) && bitrateKbps >= 128
-      ? bitrateKbps >= 256 ? "opus-256" : bitrateKbps >= 192 ? "opus-192" : "opus-128"
+    tier = Number.isFinite(bitrateKbps) && bitrateKbps >= 96
+      ? bitrateKbps >= 256 ? "opus-256" : bitrateKbps >= 192 ? "opus-192" : bitrateKbps >= 128 ? "opus-128" : "opus-96"
       : null;
   } else if (family === "mp3" || family === "m4a") {
     tier = classifyLossyTier(family, bitrateKbps);
