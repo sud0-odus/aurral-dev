@@ -4,12 +4,38 @@ import fsPromises from "fs/promises";
 import path from "path";
 import { dbOps } from "../db/helpers/index.js";
 import { resolveYtdlpStagingRoot } from "./downloadFolderConfig.js";
+import { BackgroundEncodeSlots } from "./downloadJobs/backgroundEncodeSlots.js";
 
 const DEFAULT_BINARY = "yt-dlp";
 const SEARCH_LIMIT = 5;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const AUDIO_FORMAT = "m4a";
 const activeDownloads = new Map();
+// Opt-in end-to-end yt-dlp limiter. yt-dlp owns FFmpeg postprocessing,
+// so this caps *acquisition + conversion*, not conversion alone.
+const pipelineLimit = Number(process.env.AURRAL_YTDLP_PIPELINE_LIMIT || 0);
+const pipelineSlots = Number.isSafeInteger(pipelineLimit) && pipelineLimit > 0
+  ? new BackgroundEncodeSlots(pipelineLimit)
+  : null;
+
+async function withPipelineSlot(operation, shouldCancel) {
+  if (!pipelineSlots) return operation();
+  const controller = new AbortController();
+  const checkCancelled = () => {
+    try {
+      if (shouldCancel?.() === true) controller.abort();
+    } catch {}
+  };
+  checkCancelled();
+  const poll = setInterval(checkCancelled, 250);
+  poll.unref?.();
+  try {
+    return await pipelineSlots.run(operation, { signal: controller.signal });
+  } finally {
+    clearInterval(poll);
+  }
+}
+
 
 export const ytdlpSettings = Object.freeze({
   key: "ytdlp",
@@ -295,14 +321,15 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel }
     url,
   ];
   try {
-    try {
-      await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
-    } catch (error) {
-      // YouTube often refuses one signed media URL with 403; a new run
-      // extracts fresh URLs and usually succeeds.
-      if (!/HTTP Error 403/u.test(error?.message || "")) throw error;
-      await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
-    }
+    await withPipelineSlot(async () => {
+      try {
+        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
+      } catch (error) {
+        // Keep the slot through the retry so retried downloads cannot exceed the cap.
+        if (!/HTTP Error 403/u.test(error?.message || "")) throw error;
+        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
+      }
+    }, shouldCancel);
   } catch (error) {
     await fsPromises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
     throw error;
