@@ -714,7 +714,9 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     }
     mergeSearchResults(aggregated, seen, cached, searchResultKey);
   }
-  const isCancelled = () => !isPipelinePayloadActive(payload);
+  const searchTimedOut = () => Number(payload.searchStartedAt) > 0
+    && Date.now() - Number(payload.searchStartedAt) >= 60000;
+  const isCancelled = () => !isPipelinePayloadActive(payload) || searchTimedOut();
   const enough = (results) => hasSlskdSearchCandidates(results, resolvedTrack, searchOptions);
   const activeSearch = payload.activeSearch?.query === queries[index] ? payload.activeSearch : null;
   if (payload.activeSearch && !activeSearch) {
@@ -740,6 +742,8 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     }
     if (isCancelled()) {
       searchMonitors.delete(activeSearch.id);
+      await stopSearch(activeSearch.id);
+      if (searchTimedOut() && isPipelinePayloadActive(payload)) return { timedOut: true };
       return { cancelled: true };
     }
     if (!result.done) {
@@ -781,6 +785,7 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     }
     if (isCancelled()) {
       await stopSearch(created.id);
+      if (searchTimedOut() && isPipelinePayloadActive(payload)) return { timedOut: true };
       return { cancelled: true };
     }
     return { payload: {
@@ -851,6 +856,8 @@ async function handleSearch(payload, helpers) {
     searchOptions,
   );
   if (step.cancelled || !isPipelinePayloadActive(payload)) return null;
+  if (step.timedOut) return helpers.failOrTryNextSource(payload, job,
+    "Soulseek search exceeded 60 seconds; review source or retry");
   if (step.loggedOut) return waitForSoulseekLogin(step.payload, job, helpers, step.loggedOut.message);
   if (step.payload) return step.payload;
   const { aggregated, searchIds, queryCount } = step;
