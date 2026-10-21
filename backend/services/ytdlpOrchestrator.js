@@ -303,7 +303,10 @@ async function handleYtdlpFinalize(payload, helpers) {
   const finalName = buildTrackFileName(job, ext || ".m4a");
   const finalPath = path.join(finalDir, finalName);
   const committed = await withPipelineCommitLock(payload, async () => {
-    await writeAudioMetadata(filePath, resolvedTrack);
+    // Matroska/WebM tagging is unsupported; identity remains in Aurral's database.
+    if (![".webm", ".mka", ".mkv"].includes(ext)) {
+      await writeAudioMetadata(filePath, resolvedTrack);
+    }
     import("./aurralHistoryService.js")
       .then(({ recordTrackJobMoving }) => recordTrackJobMoving(job))
       .catch((err) => {

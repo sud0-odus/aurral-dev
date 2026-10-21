@@ -3,6 +3,7 @@ import { dbOps } from "../../db/helpers/index.js";
 import { getDownloadSourceStatus } from "../downloadSourceService.js";
 import { planProviderDispatch, PROVIDER_SOURCES } from "./providerSchedulerPolicy.js";
 import { recordDownloadEvent } from "./downloadEventHistory.js";
+import { pipelineCapacityStage, retainRemoteTransferReservation } from "./pipelineCapacityStages.js";
 
 // Opt-in until the real provider integrations have been exercised in staging.
 export const providerSchedulerEnabled = () => process.env.AURRAL_PROVIDER_SCHEDULER === "1";
@@ -23,8 +24,7 @@ db.exec(`
 if (!db.prepare("PRAGMA table_info(download_provider_reservations)").all().some((column) => column.name === "stage")) {
   db.exec("ALTER TABLE download_provider_reservations ADD COLUMN stage TEXT NOT NULL DEFAULT 'search'");
 }
-export const pipelineCapacityStage = (phase) => phase === "download" || phase === "poll"
-  ? "transfer" : phase === "finalize" ? "finalize" : "search";
+
 const getReservation = db.prepare("SELECT * FROM download_provider_reservations WHERE job_id = ?");
 const getActive = db.prepare("SELECT provider_id, COUNT(*) AS count FROM download_provider_reservations WHERE provider_id IS NOT NULL AND stage = ? GROUP BY provider_id");
 const insertReservation = db.prepare(`INSERT INTO download_provider_reservations
@@ -150,10 +150,7 @@ export function parkPipelineProvider(payload, nextPayload) {
   if (!providerSchedulerEnabled() || !payload?.jobId || !payload?.downloadAttemptId || !nextPayload) return 0;
   // Remote transfer remains active across durable poll messages. No other phase
   // holds a provider lane while its continuation waits in the queue.
-  const from = pipelineCapacityStage(payload.phase);
-  const to = pipelineCapacityStage(nextPayload.phase);
-  if (from === "transfer" && to === "transfer" &&
-    ["slskd", "usenet"].includes(payload.source)) return 0;
+  if (retainRemoteTransferReservation(payload, nextPayload)) return 0;
   return parkReservation.run(Date.now(), payload.jobId, payload.downloadAttemptId).changes;
 }
 
