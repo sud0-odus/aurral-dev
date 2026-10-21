@@ -425,6 +425,8 @@ db.exec(`
     ON library_albums (mbid);
   CREATE INDEX IF NOT EXISTS idx_library_albums_release_group_mbid
     ON library_albums (release_group_mbid);
+  CREATE INDEX IF NOT EXISTS idx_library_albums_provider_id
+    ON library_albums (CAST(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.id') END AS TEXT));
   CREATE INDEX IF NOT EXISTS idx_library_albums_title
     ON library_albums (title COLLATE NOCASE);
   CREATE INDEX IF NOT EXISTS idx_library_albums_release_date

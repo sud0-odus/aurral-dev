@@ -1113,6 +1113,21 @@ export function getLibraryForTrackMatches({
   };
 }
 
+const LIBRARY_ALBUM_REFERENCE_COLUMNS = Object.freeze([
+  "identity_key",
+  "mbid",
+  "release_group_mbid",
+  "CAST(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.id') END AS TEXT)",
+]);
+
+/** Resolve an album reference to an ID without loading every track/media row.
+ *  Used for activity links and history summaries, not full album rendering. */
+export function resolveLibraryAlbumId(reference) {
+  const references = normalizeLookupValues([reference]);
+  if (!references.length) return null;
+  return resolveLibraryReferenceIds("library_albums", references, LIBRARY_ALBUM_REFERENCE_COLUMNS)[0] ?? null;
+}
+
 export function getLibraryForAlbumReferences({
   source = null,
   availableOnly = false,
@@ -1120,16 +1135,10 @@ export function getLibraryForAlbumReferences({
 } = {}) {
   const references = normalizeLookupValues(requestedReferences);
   if (!references.length) return { artists: [], albums: [], tracks: [] };
-  const columns = [
-    "identity_key",
-    "mbid",
-    "release_group_mbid",
-    "CAST(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.id') END AS TEXT)",
-  ];
   const ids = resolveLibraryReferenceIds(
     "library_albums",
     references,
-    columns,
+    LIBRARY_ALBUM_REFERENCE_COLUMNS,
   );
   if (!ids.length) return { artists: [], albums: [], tracks: [] };
   const sourceFilter = normalizeSource(source);
