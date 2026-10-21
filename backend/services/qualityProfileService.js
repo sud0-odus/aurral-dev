@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { parseFile } from "music-metadata";
+import { parseAudioWithBitrate } from "./trackMatching/audioBitrateFallback.js";
 import { db } from "../config/db-sqlite.js";
 import { dbOps } from "../db/helpers/index.js";
 import { indexUnmonitoredJobs } from "./aurralUnmonitoredJobs.js";
@@ -81,7 +81,7 @@ export function validateParsedQuality(
 }
 
 async function readQuality(filePath) {
-  const parsed = await parseFile(filePath, { duration: true });
+  const parsed = await parseAudioWithBitrate(filePath);
   return classifyAudioQuality(parsed, filePath);
 }
 
