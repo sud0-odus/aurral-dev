@@ -7,16 +7,17 @@ function configuredLimit() {
 let active = 0;
 const waiters = [];
 function release() {
-  active -= 1;
   const next = waiters.shift();
-  if (next) next();
+  if (next) next(); // Hand off the reserved slot; never expose it to a newcomer.
+  else active -= 1;
 }
 export async function withYtdlpSearchSlot(operation) {
   if (typeof operation !== "function") throw new TypeError("operation must be a function");
   if (active >= configuredLimit()) {
     await new Promise((resolve) => waiters.push(resolve));
+  } else {
+    active += 1;
   }
-  active += 1;
   try {
     return await operation();
   } finally {
