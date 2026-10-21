@@ -370,7 +370,7 @@ export async function selectVerifiedDownloadedFile({
   options = {},
 } = {}) {
   const trackRequest = normalizeValidationRequest(request, context);
-  const parseFn = options.parseFile || parseFile;
+  const parseFn = options.parseFile || parseAudioWithBitrate;
   if (!Array.isArray(filePaths) || filePaths.length === 0) {
     return { filePath: null, validation: null };
   }
