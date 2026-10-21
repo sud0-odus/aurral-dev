@@ -14,12 +14,23 @@ const activeDownloads = new Map();
 // Opt-in end-to-end yt-dlp limiter. yt-dlp owns FFmpeg postprocessing,
 // so this caps *acquisition + conversion*, not conversion alone.
 const pipelineLimit = Number(process.env.AURRAL_YTDLP_PIPELINE_LIMIT || 0);
-const pipelineSlots = Number.isSafeInteger(pipelineLimit) && pipelineLimit > 0
-  ? new BackgroundEncodeSlots(pipelineLimit)
-  : null;
+let pipelineSlots = null;
+function downloadSlots() {
+  if (pipelineSlots) return pipelineSlots;
+  const settings = process.env.AURRAL_PROVIDER_SCHEDULER === "1"
+    ? dbOps.getSettings()?.integrations?.ytdlp?.maxActive
+    : null;
+  const configured = settings == null ? pipelineLimit : Number(settings);
+  const effective = Number.isSafeInteger(configured) && configured > 0
+    ? Math.min(configured, 8) : 0;
+  if (!effective) return null;
+  pipelineSlots = new BackgroundEncodeSlots(effective);
+  return pipelineSlots;
+}
 
 async function withPipelineSlot(operation, shouldCancel) {
-  if (!pipelineSlots) return operation();
+  const slots = downloadSlots();
+  if (!slots) return operation();
   const controller = new AbortController();
   const checkCancelled = () => {
     try {
@@ -30,7 +41,7 @@ async function withPipelineSlot(operation, shouldCancel) {
   const poll = setInterval(checkCancelled, 250);
   poll.unref?.();
   try {
-    return await pipelineSlots.run(operation, { signal: controller.signal });
+    return await slots.run(operation, { signal: controller.signal });
   } finally {
     clearInterval(poll);
   }
@@ -55,6 +66,13 @@ export const ytdlpSettings = Object.freeze({
       section: "Behavior",
     }),
     Object.freeze({
+      key: "preserveSourceAudio",
+      label: "Preserve original audio format (experimental)",
+      type: "toggle",
+      section: "Downloads",
+      hint: "Skip forced AAC/M4A conversion; original Opus/WebM may be imported.",
+    }),
+    Object.freeze({
       key: "stagingPath",
       label: "Staging path",
       type: "path",
@@ -62,7 +80,7 @@ export const ytdlpSettings = Object.freeze({
       hint: "Temporary downloads stay here until imported.",
     }),
   ]),
-  defaults: Object.freeze({ enabled: true, priority: 50, stagingPath: "" }),
+  defaults: Object.freeze({ enabled: true, priority: 50, stagingPath: "", preserveSourceAudio: false }),
   validation: Object.freeze({ required: [], url: [] }),
   testConnection: true,
 });
@@ -130,6 +148,23 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
     };
     let stdout = "";
     let stderr = "";
+    // Progress heartbeat is based on actual reported byte/percentage changes.
+    // A transfer with no progress for five minutes is terminated for review.
+    const progressWatchdog = args.includes("--progress");
+    let lastProgressAt = Date.now();
+    let lastProgressMarker = null;
+    let stderrProgressBuffer = "";
+    const checkProgress = (data) => {
+      stderrProgressBuffer = (stderrProgressBuffer + data).slice(-2048);
+      const matches = [...stderrProgressBuffer.matchAll(/\[download\]\s+(\d+(?:\.\d+)?)%/g)];
+      if (matches.length) {
+        const marker = matches.at(-1)[1];
+        if (marker !== lastProgressMarker) {
+          lastProgressMarker = marker;
+          lastProgressAt = Date.now();
+        }
+      }
+    };
     let settled = false;
     let terminationError = null;
     let forcedKillTimer = null;
@@ -139,6 +174,16 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       terminationError = error;
       signalProcess("SIGKILL");
     }, timeoutMs);
+    const stalledTimer = progressWatchdog ? setInterval(() => {
+      if (terminationError || Date.now() - lastProgressAt < 300000) return;
+      const error = new Error("yt-dlp transfer stalled: no progress for five minutes");
+      error.code = "DOWNLOAD_STALLED";
+      terminationError = error;
+      clearTimeout(timer);
+      signalProcess("SIGTERM");
+      forcedKillTimer = setTimeout(() => signalProcess("SIGKILL"), 1000);
+    }, 10000) : null;
+    stalledTimer?.unref?.();
     const cancellationTimer = typeof shouldCancel === "function"
       ? setInterval(() => {
           let cancelled = false;
@@ -159,6 +204,7 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       clearTimeout(timer);
       if (forcedKillTimer) clearTimeout(forcedKillTimer);
       if (cancellationTimer) clearInterval(cancellationTimer);
+      if (stalledTimer) clearInterval(stalledTimer);
     }
     function settleReject(error) {
       if (settled) return;
@@ -167,10 +213,14 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       reject(error);
     }
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const data = chunk.toString();
+      if (progressWatchdog) checkProgress(data);
+      stdout = (stdout + data).slice(-1048576);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const data = chunk.toString();
+      if (progressWatchdog) checkProgress(data);
+      stderr = (stderr + data).slice(-8192);
     });
     child.on("error", (error) => {
       settleReject(error);
@@ -215,7 +265,7 @@ async function testConnectionFor(config = null, { force: _force = false } = {}) 
   }
 }
 
-async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
+async function searchFor(_config = null, query, { limit = SEARCH_LIMIT, shouldCancel } = {}) {
   const trimmed = String(query || "").trim();
   if (!trimmed) return [];
   const capped = Math.min(Math.max(Number(limit) || SEARCH_LIMIT, 1), 10);
@@ -227,7 +277,7 @@ async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
       "--no-warnings",
       `ytsearch${capped}:${trimmed}`,
     ],
-    { timeoutMs: 60000 },
+    { timeoutMs: 60000, shouldCancel },
   );
   const results = [];
   for (const line of String(stdout || "").split("\n")) {
@@ -256,13 +306,13 @@ async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
   return results;
 }
 
-async function inspectVideoFor(_config = null, videoId) {
+async function inspectVideoFor(_config = null, videoId, { shouldCancel } = {}) {
   const id = String(videoId || "").trim();
   if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
   const url = `https://www.youtube.com/watch?v=${id}`;
   const { stdout } = await runYtdlp(
     ["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", "--", url],
-    { timeoutMs: 60000 },
+    { timeoutMs: 60000, shouldCancel },
   );
   const entry = JSON.parse(stdout);
   if (String(entry.id || "") !== id) return null;
@@ -304,17 +354,16 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel }
   await fsPromises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   await fsPromises.mkdir(stagingDir, { recursive: true });
   const outTemplate = path.join(stagingDir, "%(id)s.%(ext)s");
+  const preserveSourceAudio = getSettings(config).preserveSourceAudio === true;
   const args = [
     "--no-playlist",
     "--no-warnings",
-    "-x",
-    "--embed-metadata",
+    "--progress",
+    "--newline",
+    ...(preserveSourceAudio ? ["-f", "bestaudio/best"] : ["-x", "--embed-metadata"]),
     "--parse-metadata",
     "title:^(?P<artist>.+?)\\s+[-–—]\\s+(?P<title>.+)$",
-    "--audio-format",
-    AUDIO_FORMAT,
-    "--audio-quality",
-    "0",
+    ...(!preserveSourceAudio ? ["--audio-format", AUDIO_FORMAT, "--audio-quality", "0"] : []),
     "-o",
     outTemplate,
     "--",
@@ -380,8 +429,8 @@ export class YtdlpClient {
   search(query, options) {
     return searchFor(this._config, query, options);
   }
-  inspectVideo(videoId) {
-    return inspectVideoFor(this._config, videoId);
+  inspectVideo(videoId, options) {
+    return inspectVideoFor(this._config, videoId, options);
   }
 
   downloadAudio(videoUrl, options) {

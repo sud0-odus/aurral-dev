@@ -63,6 +63,8 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
+  const deadline = Date.now() + 60000;
+  const shouldCancel = () => Date.now() >= deadline || !isPipelinePayloadActive(payload);
   downloadTracker.setDownloading(job.id);
   downloadTracker.updateDownloadMetadata(job.id, {
     downloadSource: "ytdlp",
@@ -92,7 +94,7 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
   const sourceVideoId = String(job.sourceVideoId || "").trim();
   if (/^[A-Za-z0-9_-]{11}$/.test(sourceVideoId) && !deniedIds.has(sourceVideoId)) {
     try {
-      const original = await ytdlpClient.inspectVideo(sourceVideoId);
+      const original = await ytdlpClient.inspectVideo(sourceVideoId, { shouldCancel });
       if (original && !isYtdlpLiveResult(original)) {
         mergeSearchResults(aggregated, seen, [original], (entry) =>
           String(entry.id || entry.url || "").trim().toLowerCase(),
@@ -107,10 +109,10 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
     }
   }
   for (const query of [...queries, fallbackQuery].filter(Boolean)) {
-    if (hasEnoughCandidates(aggregated, resolvedTrack)) break;
+    if (shouldCancel() || hasEnoughCandidates(aggregated, resolvedTrack)) break;
     if (query === fallbackQuery && aggregated.length > 0) break;
     try {
-      const results = await ytdlpClient.search(query, { limit: 5 });
+      const results = await ytdlpClient.search(query, { limit: 5, shouldCancel });
       mergeSearchResults(aggregated, seen, results.filter((entry) => !deniedIds.has(String(entry.id || "").trim())), (entry) =>
         String(entry.id || entry.url || "").trim().toLowerCase(),
       );
@@ -124,6 +126,11 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
     }
   }
 
+  if (!isPipelinePayloadActive(payload)) return null;
+  if (Date.now() >= deadline) {
+    return helpers.failOrTryNextSource(payload, job,
+      "yt-dlp search exceeded the 60-second deadline; review or retry this track");
+  }
   // Live streams are not recordings of the requested track.
   const downloadableResults = aggregated.filter(
     (result) => !isYtdlpLiveResult(result),
@@ -133,6 +140,10 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
     results: downloadableResults,
     request: resolvedTrack,
   });
+  if (Date.now() >= deadline) {
+    return helpers.failOrTryNextSource(payload, job,
+      "yt-dlp candidate evaluation exceeded the 60-second deadline");
+  }
   const candidates = usableEvaluationEntries(evaluation)
     .filter((entry) => !deniedIds.has(String(entry.candidate?.provider?.id || "").trim()))
     .map(toPipelineCandidate);
@@ -292,7 +303,10 @@ async function handleYtdlpFinalize(payload, helpers) {
   const finalName = buildTrackFileName(job, ext || ".m4a");
   const finalPath = path.join(finalDir, finalName);
   const committed = await withPipelineCommitLock(payload, async () => {
-    await writeAudioMetadata(filePath, resolvedTrack);
+    // Matroska/WebM tagging is unsupported; identity remains in Aurral's database.
+    if (![".webm", ".mka", ".mkv"].includes(ext)) {
+      await writeAudioMetadata(filePath, resolvedTrack);
+    }
     import("./aurralHistoryService.js")
       .then(({ recordTrackJobMoving }) => recordTrackJobMoving(job))
       .catch((err) => {

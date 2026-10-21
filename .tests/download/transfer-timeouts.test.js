@@ -74,7 +74,7 @@ test("a rejected slskd transfer moves to the next user instead of retrying the s
   assert.equal(next.candidateIndex, 1);
 });
 
-test("a file in an uploader's queue moves to the next candidate after 10 minutes", async (t) => {
+test("a file in an uploader's queue moves to the next candidate after five minutes", async (t) => {
   dbOps.updateSettings({ ...dbOps.getSettings(), integrations: {
     slskd: { enabled: true, url: "http://127.0.0.1:9" },
   } });
@@ -88,7 +88,7 @@ test("a file in an uploader's queue moves to the next candidate after 10 minutes
     legacyTransfer: { id: "transfer-1", username: "busy" }, candidateIndex: 0,
     candidates: [{ raw: { user: "busy", file: "a.flac" } }, { raw: { user: "free", file: "b.flac" } }] };
   const waiting = await processPipelinePayload(polling);
-  const quarterHourAgo = Date.now() - 15 * 60 * 1000;
+  const quarterHourAgo = Date.now() - 6 * 60 * 1000;
 
   const moved = await processPipelinePayload({ ...waiting, lastProgressAt: quarterHourAgo });
   assert.equal(moved.phase, "download");
@@ -96,7 +96,7 @@ test("a file in an uploader's queue moves to the next candidate after 10 minutes
   assert.equal(removed.mock.callCount(), 1);
 
   const lastCandidate = await processPipelinePayload({ ...waiting, candidateIndex: 1, lastProgressAt: quarterHourAgo });
-  assert.equal(lastCandidate.phase, "poll");
+  assert.equal(lastCandidate, null);
 });
 
 test("a paused Usenet download keeps waiting while the client holds it", async (t) => {

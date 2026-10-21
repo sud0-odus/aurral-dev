@@ -87,9 +87,9 @@ const TRANSFER_RESET = Object.freeze({
   tailSince: null,
 });
 const ALBUM_TRANSFER_RESET = Object.freeze({ ...TRANSFER_RESET, albumTransfers: null });
-const STALLED_TRANSFER_MS = 30 * 60 * 1000;
-const QUEUED_TRANSFER_MS = 10 * 60 * 1000;
-const TAIL_ALBUM_TRANSFER_MS = 20 * 60 * 1000;
+const STALLED_TRANSFER_MS = 5 * 60 * 1000;
+const QUEUED_TRANSFER_MS = 5 * 60 * 1000;
+const TAIL_ALBUM_TRANSFER_MS = 5 * 60 * 1000; // informational; real inactivity uses STALLED_TRANSFER_MS
 const searchMonitors = createCache(10 * 60, 100);
 const MIN_SEARCH_CANDIDATES = 3;
 const MAX_DOWNLOAD_CANDIDATES = 7;
@@ -799,6 +799,16 @@ async function handleSearch(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
+  // Persist the search deadline through poll/handoff messages. A stalled search
+  // cannot monopolize a provider's search capacity indefinitely.
+  const searchStartedAt = Number(payload.searchStartedAt) > 0
+    ? Number(payload.searchStartedAt) : Date.now();
+  if (Date.now() - searchStartedAt >= 60_000) {
+    if (payload.activeSearch?.id) await stopSearch(payload.activeSearch.id);
+    return helpers.failOrTryNextSource(payload, job,
+      "Soulseek search exceeded the 60-second deadline; review or retry this track");
+  }
+  payload = { ...payload, searchStartedAt };
   if (await isStillLoggedOut(payload)) return waitForSoulseekLogin(payload, job, helpers);
   if (payload.soulseekLoggedOutSince) {
     payload = { ...payload, soulseekLoggedOutSince: null };
@@ -1123,11 +1133,12 @@ async function handlePoll(payload, helpers) {
     // gets 10 minutes, as a single file does, before the next folder.
     const queuedTooLong = transfers.every((transfer) => transfer && isQueuedUntouched(transfer))
       && Date.now() - progress.lastProgressAt > QUEUED_TRANSFER_MS;
-    if (!progress.stalled && !queuedTooLong && !(tailSince && Date.now() - tailSince > tailWindow)) {
+    if (!progress.stalled && !queuedTooLong) {
       return { ...payload, phase: "poll", pollAttempts, delaySeconds: POLL_DELAY_SECONDS,
         lastProgress: progress.lastProgress, lastProgressAt: progress.lastProgressAt, tailSince };
     }
-    // Keep the files that finished. The album attempt continues for the rest.
+    // Progressing transfers continue regardless of total elapsed time.
+    // Keep the files that finished and cancel only stalled remote transfers.
     const settled = transfers.map((transfer, index) => transfer || payload.albumTransfers[index]);
     for (const transfer of settled) {
       if (classifyTransferState(readTransferState(transfer)) !== "pending") continue;
