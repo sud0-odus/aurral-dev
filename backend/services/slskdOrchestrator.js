@@ -89,7 +89,7 @@ const TRANSFER_RESET = Object.freeze({
 const ALBUM_TRANSFER_RESET = Object.freeze({ ...TRANSFER_RESET, albumTransfers: null });
 const STALLED_TRANSFER_MS = 5 * 60 * 1000;
 const QUEUED_TRANSFER_MS = 5 * 60 * 1000;
-const TAIL_ALBUM_TRANSFER_MS = 5 * 60 * 1000;
+const TAIL_ALBUM_TRANSFER_MS = 5 * 60 * 1000; // informational; real inactivity uses STALLED_TRANSFER_MS
 const searchMonitors = createCache(10 * 60, 100);
 const MIN_SEARCH_CANDIDATES = 3;
 const MAX_DOWNLOAD_CANDIDATES = 7;
@@ -1123,11 +1123,12 @@ async function handlePoll(payload, helpers) {
     // gets 10 minutes, as a single file does, before the next folder.
     const queuedTooLong = transfers.every((transfer) => transfer && isQueuedUntouched(transfer))
       && Date.now() - progress.lastProgressAt > QUEUED_TRANSFER_MS;
-    if (!progress.stalled && !queuedTooLong && !(tailSince && Date.now() - tailSince > tailWindow)) {
+    if (!progress.stalled && !queuedTooLong) {
       return { ...payload, phase: "poll", pollAttempts, delaySeconds: POLL_DELAY_SECONDS,
         lastProgress: progress.lastProgress, lastProgressAt: progress.lastProgressAt, tailSince };
     }
-    // Keep the files that finished. The album attempt continues for the rest.
+    // Progressing transfers continue regardless of total elapsed time.
+    // Keep the files that finished and cancel only stalled remote transfers.
     const settled = transfers.map((transfer, index) => transfer || payload.albumTransfers[index]);
     for (const transfer of settled) {
       if (classifyTransferState(readTransferState(transfer)) !== "pending") continue;

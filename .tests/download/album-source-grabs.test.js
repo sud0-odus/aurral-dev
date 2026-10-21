@@ -270,7 +270,7 @@ test("a Soulseek album gives up on files left queued or crawling and keeps the o
   assert.equal((await processPipelinePayload({ ...moving, tailSince: Date.now() - 11 * 60 * 1000 })).phase, "poll");
   crawling.bytesTransferred = 12288;
   assert.equal((await processPipelinePayload({ ...moving, tailSince: Date.now() - 21 * 60 * 1000 })).phase,
-    "finalize");
+    "poll");
   await processPipelinePayload(stalled);
   assert.equal(downloadTracker.getJob(album.ids[0]).status, "done");
   assert.equal(downloadTracker.getJob(album.ids[1]).status, "pending");
