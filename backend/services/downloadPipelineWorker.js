@@ -1,4 +1,5 @@
 import createHonkerWorker from "./honkerWorkerFactory.js";
+import { performance } from "node:perf_hooks";
 import { getPipelineQueue } from "./honkerDb.js";
 import {
   continuePipeline,
@@ -20,12 +21,18 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
   const processPayload = dependencies.processPipelinePayload || processPipelinePayload;
   const continuePayload = dependencies.continuePipeline || continuePipeline;
   const failPayload = dependencies.failPipelineJob || failPipelineJob;
+  const trace = process.env.AURRAL_PIPELINE_TRACE === "1";
+  const started = trace ? performance.now() : 0;
+  const cpuBefore = trace ? process.cpuUsage() : null;
+  let outcome = "completed";
+  let nextPhase = null;
   try {
     if (payload?.albumGrab === true && isPipelinePayloadActive(payload)) {
       recordAlbumGrabQueued(payload, downloadTracker.getAll());
       recordAlbumGrabPhase(payload);
     }
     const nextPayload = await processPayload(payload);
+    nextPhase = nextPayload?.phase || "terminal";
     if (providerSchedulerEnabled() && nextPayload == null) releasePipelineProvider(payload);
     if (nextPayload?.albumGrab === true) recordAlbumGrabPhase(nextPayload);
     if (payload?.albumGrab === true
@@ -34,6 +41,7 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
     }
     await continuePayload(nextPayload);
   } catch (error) {
+    outcome = "error";
     if (payload?.manualSelection !== true) throw error;
     const message = safeLogDiagnostic(error) || "Manual download failed";
     logger.error("manual-search", "Selected manual download failed", {
@@ -42,6 +50,21 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
       reason: message,
     });
     await failPayload(payload, message);
+  } finally {
+    if (trace) {
+      const cpu = process.cpuUsage(cpuBefore);
+      logger.info("pipeline-trace", "Pipeline stage execution", {
+        jobId: payload?.jobId || null,
+        attemptId: payload?.downloadAttemptId || null,
+        provider: payload?.providerId || payload?.source || "unassigned",
+        phase: payload?.phase || "unknown",
+        nextPhase,
+        outcome,
+        wallMs: Math.round(performance.now() - started),
+        nodeCpuMs: Math.round((cpu.user + cpu.system) / 1000),
+        pid: process.pid,
+      });
+    }
   }
 }
 
