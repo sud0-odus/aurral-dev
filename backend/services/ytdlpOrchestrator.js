@@ -12,6 +12,7 @@ import {
 } from "./trackMatching/index.js";
 import { readYoutubeUpload } from "./trackMatching/youtubeEvidence.js";
 import { buildYtdlpSearchQueries } from "./downloadJobs/ytdlpSearch.js";
+import { withYtdlpSearchSlot } from "./downloadJobs/ytdlpSearchSlots.js";
 import { resolveDownloadRoot } from "./downloadPaths.js";
 import {
   buildResolvedJobTrack as buildResolvedTrack,
@@ -54,6 +55,11 @@ export function hasEnoughCandidates(aggregated, resolvedTrack) {
 }
 
 async function handleYtdlpSearch(payload, helpers) {
+  // Limit expensive yt-dlp metadata searches independently of audio downloads.
+  return withYtdlpSearchSlot(() => handleYtdlpSearchUnlocked(payload, helpers));
+}
+
+async function handleYtdlpSearchUnlocked(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
