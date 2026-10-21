@@ -18,7 +18,7 @@
 // `valid`/`blocked` fields (VERIFIED→valid, AMBIGUOUS→blocked) so the
 // existing review routing keeps working unchanged.
 
-import { parseFile } from "music-metadata";
+import { parseAudioWithBitrate } from "./audioBitrateFallback.js";
 import { buildTrackRequest } from "./trackIdentity.js";
 import { getFileName, getFileBaseName, claimedTitle, parseFilenameArtistTitle } from "./candidateNormalizer.js";
 import { getCoreTitle } from "./semanticPolicy.js";
@@ -175,7 +175,7 @@ export async function validateDownloadedTrackFile({
 } = {}) {
   const trackRequest = normalizeValidationRequest(request, context);
   const strict = options.strict === true;
-  const parseFn = options.parseFile || parseFile;
+  const parseFn = options.parseFile || parseAudioWithBitrate;
 
   let parsed = null;
   try {
