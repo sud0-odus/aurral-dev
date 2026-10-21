@@ -55,6 +55,13 @@ export const ytdlpSettings = Object.freeze({
       section: "Behavior",
     }),
     Object.freeze({
+      key: "preserveSourceAudio",
+      label: "Preserve original audio format (experimental)",
+      type: "toggle",
+      section: "Downloads",
+      hint: "Skip forced AAC/M4A conversion. Original Opus/WebM may not match existing quality tiers; test before enabling on a production library.",
+    }),
+    Object.freeze({
       key: "stagingPath",
       label: "Staging path",
       type: "path",
@@ -62,7 +69,7 @@ export const ytdlpSettings = Object.freeze({
       hint: "Temporary downloads stay here until imported.",
     }),
   ]),
-  defaults: Object.freeze({ enabled: true, priority: 50, stagingPath: "" }),
+  defaults: Object.freeze({ enabled: true, priority: 50, stagingPath: "", preserveSourceAudio: false }),
   validation: Object.freeze({ required: [], url: [] }),
   testConnection: true,
 });
@@ -304,17 +311,14 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel }
   await fsPromises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   await fsPromises.mkdir(stagingDir, { recursive: true });
   const outTemplate = path.join(stagingDir, "%(id)s.%(ext)s");
+  const preserveSourceAudio = getSettings(config).preserveSourceAudio === true;
   const args = [
     "--no-playlist",
     "--no-warnings",
-    "-x",
-    "--embed-metadata",
+    ...(preserveSourceAudio ? ["-f", "bestaudio/best"] : ["-x", "--embed-metadata"]),
     "--parse-metadata",
     "title:^(?P<artist>.+?)\\s+[-–—]\\s+(?P<title>.+)$",
-    "--audio-format",
-    AUDIO_FORMAT,
-    "--audio-quality",
-    "0",
+    ...(!preserveSourceAudio ? ["--audio-format", AUDIO_FORMAT, "--audio-quality", "0"] : []),
     "-o",
     outTemplate,
     "--",
