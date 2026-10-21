@@ -129,7 +129,7 @@ export function reservePipelineProvider(payload) {
     const request = candidateJob(payload);
     if (old?.provider_id && payload.providerId === old.provider_id && old.stage === stage) {
       // A multi-phase provider attempt holds its slot until completion/fallback.
-      return payload;
+      return { ...payload, delaySeconds: null };
     }
     const desired = String(payload.providerId || "").trim();
     // A continuation or a source fallback must stay with its selected source.
@@ -158,6 +158,7 @@ export function reservePipelineProvider(payload) {
     return {
       ...payload,
       ...assignment,
+      delaySeconds: null,
       providerId: assignment.providerId,
       source: assignment.source,
       ...(assignment.downloadClient ? { downloadClient: assignment.downloadClient } : { downloadClient: null }),
