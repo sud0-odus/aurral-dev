@@ -275,7 +275,7 @@ const pipeline = registerQueue({
 export const getPipelineQueue = pipeline.getQueue;
 export function enqueuePipelineJob(payload, options = {}) {
   // Capture initial queue delay as well as all intermediate durable handoffs.
-  return pipeline.enqueueJob({ traceEnqueuedAtMs: Date.now(), ...payload }, options);
+  return pipeline.enqueueJob({ ...payload, traceEnqueuedAtMs: Date.now() }, options);
 }
 
 const discoveryRefresh = registerQueue({
