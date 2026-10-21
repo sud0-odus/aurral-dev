@@ -87,16 +87,16 @@ const TRANSFER_RESET = Object.freeze({
   tailSince: null,
 });
 const ALBUM_TRANSFER_RESET = Object.freeze({ ...TRANSFER_RESET, albumTransfers: null });
-const STALLED_TRANSFER_MS = 30 * 60 * 1000;
-const QUEUED_TRANSFER_MS = 10 * 60 * 1000;
-const TAIL_ALBUM_TRANSFER_MS = 20 * 60 * 1000;
+const STALLED_TRANSFER_MS = 5 * 60 * 1000;
+const QUEUED_TRANSFER_MS = 5 * 60 * 1000;
+const TAIL_ALBUM_TRANSFER_MS = 5 * 60 * 1000;
 const searchMonitors = createCache(10 * 60, 100);
 const MIN_SEARCH_CANDIDATES = 3;
 const MAX_DOWNLOAD_CANDIDATES = 7;
 const MAX_TRANSFER_RETRIES_PER_CANDIDATE = 1;
 const POLL_DELAY_SECONDS = 3;
 const SOULSEEK_LOGIN_RECHECK_SECONDS = 60;
-const SOULSEEK_LOGIN_WAIT_LIMIT_MS = 45 * 60 * 1000;
+const SOULSEEK_LOGIN_WAIT_LIMIT_MS = 60 * 1000;
 export const SLSKD_NOT_CONFIGURED_MESSAGE =
   "slskd is not configured. Enable slskd and add its Server URL in Settings > Download clients to enable Soulseek downloads for flows and playlists.";
 
@@ -799,6 +799,15 @@ async function handleSearch(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
+  const searchStartedAt = Number(payload.searchStartedAt) || Date.now();
+  if (Date.now() - searchStartedAt >= 60000) {
+    if (payload.activeSearch?.id) {
+      searchMonitors.delete(payload.activeSearch.id);
+      await stopSearch(payload.activeSearch.id);
+    }
+    return helpers.failOrTryNextSource(payload, job, "Soulseek search exceeded 60 seconds; review candidates or retry");
+  }
+  payload = { ...payload, searchStartedAt };
   if (await isStillLoggedOut(payload)) return waitForSoulseekLogin(payload, job, helpers);
   if (payload.soulseekLoggedOutSince) {
     payload = { ...payload, soulseekLoggedOutSince: null };

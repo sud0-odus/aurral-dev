@@ -189,22 +189,27 @@ function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCanc
       clearTimers();
       reject(error);
     }
+    const readProgress = (output) => {
+      if (idleTimeoutMs <= 0) return;
+      const matches = [...output.matchAll(/\[download\]\s+(\d+(?:\.\d+)?)%/g)];
+      for (const match of matches) {
+        const percent = Number(match[1]);
+        if (percent > progressPercent) {
+          progressPercent = percent;
+          lastTransferProgressAt = Date.now();
+        }
+      }
+    };
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const output = chunk.toString();
+      // Searches use stdout for JSON; downloads only need a bounded tail.
+      stdout = idleTimeoutMs > 0 ? (stdout + output).slice(-8192) : stdout + output;
+      readProgress(output);
     });
     child.stderr.on("data", (chunk) => {
       const output = chunk.toString();
       stderr = (stderr + output).slice(-8192);
-      if (idleTimeoutMs > 0) {
-        const matches = [...output.matchAll(/\[download\]\s+(\d+(?:\.\d+)?)%/g)];
-        for (const match of matches) {
-          const percent = Number(match[1]);
-          if (percent > progressPercent) {
-            progressPercent = percent;
-            lastTransferProgressAt = Date.now();
-          }
-        }
-      }
+      readProgress(output);
     });
     child.on("error", (error) => {
       settleReject(error);
