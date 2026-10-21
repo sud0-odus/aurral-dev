@@ -325,22 +325,32 @@ function resolveStagingDir(config, jobId) {
   );
 }
 
-async function findDownloadedAudio(dir) {
+async function findDownloadedAudio(dir, videoId = null) {
   const entries = await fsPromises.readdir(dir).catch(() => []);
   const audioExt = new Set([".m4a", ".mp3", ".opus", ".flac", ".ogg", ".webm", ".wav"]);
   for (const name of entries) {
     const full = path.join(dir, name);
     if (!audioExt.has(path.extname(name).toLowerCase())) continue;
+    if (videoId && path.parse(name).name !== videoId) continue;
     const stat = await fsPromises.stat(full).catch(() => null);
     if (stat?.isFile() && stat.size > 0) return full;
   }
   return null;
 }
 
-async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel } = {}) {
+async function downloadAudioFor(config = null, videoUrl, { jobId, videoId, shouldCancel } = {}) {
   const url = String(videoUrl || "").trim();
   if (!url) throw new Error("Missing yt-dlp download URL");
   const stagingDir = resolveStagingDir(config, jobId);
+  // The remote acquisition may have completed immediately before a worker
+  // crash. A finished yt-dlp output is named <video-id>.<ext>; only reuse an
+  // exact candidate ID and still validate it in the normal finalize phase.
+  const identity = /^[A-Za-z0-9_-]{11}$/.test(String(videoId || "")) ? String(videoId) : null;
+  const recovered = identity ? await findDownloadedAudio(stagingDir, identity) : null;
+  if (recovered) {
+    if (shouldCancel?.() === true) throw new Error("yt-dlp recovery cancelled");
+    return { filePath: recovered, stagingDir, recovered: true };
+  }
   await fsPromises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   await fsPromises.mkdir(stagingDir, { recursive: true });
   const outTemplate = path.join(stagingDir, "%(id)s.%(ext)s");

@@ -1003,6 +1003,21 @@ async function handleDownload(payload, helpers) {
     return helpers.failOrTryNextSource(payload, job, "No download candidate available");
   }
   const searchId = payload.searchId || null;
+  // Reattach to an existing remote transfer after a worker restart instead
+  // of submitting the same file a second time. Provider state is authoritative.
+  if (job.downloadClientId
+    && job.remoteUsername === candidate.raw.user
+    && job.remoteFilename === candidate.raw.file) {
+    const priorTransfer = await slskdClient.getTransfer(
+      job.remoteUsername, job.downloadClientId).catch(() => null);
+    if (priorTransfer) {
+      return {
+        ...payload, phase: "poll", candidate, candidateIndex: index,
+        legacyTransfer: { id: job.downloadClientId, username: job.remoteUsername },
+        pollAttempts: 0,
+      };
+    }
+  }
   updateSlskdMetaStmt.run(searchId, null, candidate.raw.user, candidate.raw.file, job.id);
   downloadTracker.updateDownloadMetadata(job.id, {
     downloadSource: "slskd",

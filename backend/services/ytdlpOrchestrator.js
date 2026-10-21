@@ -196,6 +196,7 @@ async function handleYtdlpDownload(payload, helpers) {
   try {
     downloaded = await ytdlpClient.downloadAudio(url, {
       jobId: job.id,
+      videoId: candidate?.raw?.id,
       shouldCancel: () => !isPipelinePayloadActive(payload),
     });
   } catch (error) {
