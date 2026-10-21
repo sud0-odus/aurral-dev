@@ -194,16 +194,16 @@ function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCanc
     }
     const readProgress = (output, stream) => {
       if (idleTimeoutMs <= 0) return;
-      const lines = (progressBuffers[stream] + output).split(/[\\r\\n]+/);
+      const lines = (progressBuffers[stream] + output).split(/[\r\n]+/);
       progressBuffers[stream] = lines.pop()?.slice(-256) || "";
       for (const line of lines) {
-        const bytes = /__AURRAL_BYTES__:(\\d+)/.exec(line);
+        const bytes = /__AURRAL_BYTES__:(\d+)/.exec(line);
         if (bytes && Number(bytes[1]) > progressBytes) {
           progressBytes = Number(bytes[1]);
           lastTransferProgressAt = Date.now();
           continue;
         }
-        const percentage = /\\[download\\]\\s+(\\d+(?:\\.\\d+)?)%/.exec(line);
+        const percentage = /(?:\[download\]\s+|__AURRAL_BYTES__:[^:]*:)(\d+(?:\.\d+)?)%/.exec(line);
         if (percentage && Number(percentage[1]) > progressPercent) {
           progressPercent = Number(percentage[1]);
           lastTransferProgressAt = Date.now();
@@ -368,7 +368,7 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, videoId, shoul
     "--no-playlist",
     "--no-warnings",
     "--newline",
-    "--progress-template", "download:__AURRAL_BYTES__:%(progress.downloaded_bytes)s",
+    "--progress-template", "download:__AURRAL_BYTES__:%(progress.downloaded_bytes)s:%(progress._percent_str)s",
     ...(preserveSourceAudio ? ["-f", "bestaudio/best"] : ["-x", "--embed-metadata"]),
     "--parse-metadata",
     "title:^(?P<artist>.+?)\\s+[-–—]\\s+(?P<title>.+)$",
