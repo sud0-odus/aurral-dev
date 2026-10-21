@@ -73,7 +73,7 @@ export function getProviderSchedulerCapacity(stage = "transfer") {
   return getProviderSchedulerPolicies().map((policy) => ({
     ...policy,
     // Search, acquisition and import no longer compete for the same quota.
-    maxActive: stage === "search" ? policy.searchMaxActive : policy.maxActive,
+    maxActive: stage === "search" ? policy.searchMaxActive : stage === "finalize" ? 2 : policy.maxActive,
     active: active.get(`${policy.id}:${stage}`) || 0,
   }));
 }
@@ -82,7 +82,7 @@ export function getProviderSchedulerStats() {
   const build = (stage) => getProviderSchedulerCapacity(stage).map((p) => ({
     ...p, available: p.enabled ? Math.max(0, p.maxActive - p.active) : 0,
   }));
-  return { enabled: providerSchedulerEnabled(), providers: build("transfer"), searches: build("search") };
+  return { enabled: providerSchedulerEnabled(), providers: build("transfer"), searches: build("search"), finalizers: build("finalize") };
 }
 
 export function providerSchedulerMaxWorkers() {
@@ -119,11 +119,8 @@ export function reservePipelineProvider(payload) {
         category: "scheduler", event: "orphan_reservation_recovered" });
     }
     const stage = capacityStageForPayload(payload);
-    if (stage === "finalize") {
-      // An import should never occupy a provider acquisition/search lane.
-      if (old) deleteReservation.run(payload.jobId, payload.downloadAttemptId);
-      return payload;
-    }
+    // Finalization has its own small pool; it never counts against active
+    // transfers or searches but is still bounded to protect playback latency.
     const policies = getProviderSchedulerCapacity(stage);
     const active = policies.map((p) => ({
       ...p, active: Math.max(0, p.active - (old?.provider_id === p.id && old?.stage === stage ? 1 : 0)),
