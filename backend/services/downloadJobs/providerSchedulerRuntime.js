@@ -26,7 +26,8 @@ if (!db.prepare("PRAGMA table_info(download_provider_reservations)").all().some(
   db.exec("ALTER TABLE download_provider_reservations ADD COLUMN stage TEXT NOT NULL DEFAULT 'search'");
   // Adopt the actual current phase of PR41 reservations. Assigning every
   // migrated lease to 'search' would strand active poll/finalize attempts.
-  db.exec(`UPDATE download_provider_reservations SET stage = COALESCE((
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = '_honker_live'").get()) {
+    db.exec(`UPDATE download_provider_reservations SET stage = COALESCE((
     SELECT CASE
       WHEN json_extract(h.payload, '$.phase') IN ('download','poll','transfer','await','monitor') THEN 'transfer'
       WHEN json_extract(h.payload, '$.phase') IN ('finalize','validate','import','complete') THEN 'finalize'
@@ -38,6 +39,7 @@ if (!db.prepare("PRAGMA table_info(download_provider_reservations)").all().some(
       AND json_extract(h.payload, '$.downloadAttemptId') = download_provider_reservations.attempt_id
     ORDER BY h.id DESC LIMIT 1
   ), 'search')`);
+  }
 }
 const getReservation = db.prepare("SELECT * FROM download_provider_reservations WHERE job_id = ?");
 // Honker creates _honker_live lazily. Never prepare queries against it at
