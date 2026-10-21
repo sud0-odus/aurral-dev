@@ -1076,10 +1076,12 @@ async function handleDownload(payload, helpers) {
 // the bytes, and the queue position count as progress.
 function readTransferProgress(transfer) {
   if (!transfer) return "missing";
+  // Queue position changes do not mean bytes are transferring. Count a
+  // transition to active and actual byte changes; five minutes without either
+  // is an actionable stalled/queued transfer.
   return [
     classifyTransferState(readTransferState(transfer)),
     transfer.bytesTransferred ?? transfer.BytesTransferred ?? "",
-    transfer.placeInQueue ?? transfer.PlaceInQueue ?? "",
   ].join("|");
 }
 
@@ -1102,8 +1104,7 @@ function isQueuedUntouched(transfer) {
 }
 
 // Once every other file of the album finished or failed, the rest get a
-// limited window: files still in the uploader's queue 10 minutes, a file
-// still transferring 20. Then the album imports what finished and moves on.
+// A stalled album tail is bounded to five minutes whether queued or transferring.
 function albumTailWindow(transfers) {
   const pending = transfers.filter((transfer) => !transfer
     || classifyTransferState(readTransferState(transfer)) === "pending");
@@ -1129,7 +1130,7 @@ async function handlePoll(payload, helpers) {
     const tailWindow = albumTailWindow(transfers);
     const tailSince = tailWindow ? Number(payload.tailSince) || Date.now() : null;
     // A folder whose files all still wait untouched in the uploader's queue
-    // gets 10 minutes, as a single file does, before the next folder.
+    // gets five minutes before the next folder.
     const queuedTooLong = transfers.every((transfer) => transfer && isQueuedUntouched(transfer))
       && Date.now() - progress.lastProgressAt > QUEUED_TRANSFER_MS;
     if (!progress.stalled && !queuedTooLong && !(tailSince && Date.now() - tailSince > tailWindow)) {
@@ -1200,7 +1201,7 @@ async function handlePoll(payload, helpers) {
     }
   }
   const progress = trackTransferProgress(basePayload, readTransferProgress(transfer));
-  // A file another user also has waits only 10 minutes in an uploader's queue.
+  // A file another user also has waits only five minutes in an uploader's queue.
   const queuedTooLong = transfer && isQueuedUntouched(transfer) && hasNextCandidate(basePayload)
     && Date.now() - progress.lastProgressAt > QUEUED_TRANSFER_MS;
   if (!progress.stalled && !queuedTooLong) {
