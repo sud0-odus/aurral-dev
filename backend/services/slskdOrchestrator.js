@@ -799,6 +799,16 @@ async function handleSearch(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
+  // Persist the search deadline through poll/handoff messages. A stalled search
+  // cannot monopolize a provider's search capacity indefinitely.
+  const searchStartedAt = Number(payload.searchStartedAt) > 0
+    ? Number(payload.searchStartedAt) : Date.now();
+  if (Date.now() - searchStartedAt >= 60_000) {
+    if (payload.activeSearch?.id) await stopSearch(payload.activeSearch.id);
+    return helpers.failOrTryNextSource(payload, job,
+      "Soulseek search exceeded the 60-second deadline; review or retry this track");
+  }
+  payload = { ...payload, searchStartedAt };
   if (await isStillLoggedOut(payload)) return waitForSoulseekLogin(payload, job, helpers);
   if (payload.soulseekLoggedOutSince) {
     payload = { ...payload, soulseekLoggedOutSince: null };
