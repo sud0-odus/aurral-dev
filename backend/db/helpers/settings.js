@@ -95,6 +95,10 @@ function getOrCreateEncryptionKey() {
 
 let settingsCache = null;
 let settingsCacheTime = 0;
+// Retain the parsed large playlist document across short worker TTL refreshes.
+// Compare stored text so writes by other processes become visible on next refresh.
+let sharedPlaylistsRaw;
+let sharedPlaylistsParsed;
 const SETTINGS_CACHE_TTL = 60000;
 
 const normalizeLidarrRootFolderPaths = (paths) => [...new Set(
@@ -191,9 +195,20 @@ export const dbOps = {
       getSettingStmt.get("releaseTypes")?.value
     );
     const flows = readStoredSettingJson("flows", ["weeklyFlows"]);
-    const staticPlaylists = readStoredSettingJson("sharedPlaylists", [
-      "sharedFlowPlaylists",
-    ]);
+    const sharedPlaylistsText = getSettingStmt.get("sharedPlaylists")?.value;
+    let staticPlaylists;
+    if (sharedPlaylistsText != null) {
+      if (sharedPlaylistsText !== sharedPlaylistsRaw) {
+        sharedPlaylistsParsed = dbHelpers.parseJSON(sharedPlaylistsText);
+        sharedPlaylistsRaw = sharedPlaylistsText;
+      }
+      staticPlaylists = sharedPlaylistsParsed;
+    } else {
+      // Preserve legacy fallback and detect later migration to the primary key.
+      sharedPlaylistsRaw = undefined;
+      sharedPlaylistsParsed = undefined;
+      staticPlaylists = readStoredSettingJson("sharedFlowPlaylists");
+    }
     const subsonic = readStoredSettingJson("subsonic") || {};
     const playlistWorker = normalizePlaylistWorkerSettings(
       readStoredSettingJson("playlistWorker", ["weeklyFlowWorker"]),
