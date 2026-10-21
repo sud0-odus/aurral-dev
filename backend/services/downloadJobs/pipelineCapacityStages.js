@@ -9,6 +9,8 @@ export function capacityStageForPayload(payload) {
 export function holdsRemoteTransferAcrossHandoff(current, next) {
   if (!current || !next || current.downloadAttemptId !== next.downloadAttemptId) return false;
   if (current.source !== next.source || !["slskd", "usenet"].includes(current.source)) return false;
-  return capacityStageForPayload(current) === "transfer"
-    && capacityStageForPayload(next) === "transfer";
+  // Hold only while polling the *same* remote acquisition. Poll -> download
+  // starts a new candidate and must yield the transfer lane to other jobs.
+  return ["download", "poll"].includes(String(current.phase))
+    && String(next.phase) === "poll";
 }

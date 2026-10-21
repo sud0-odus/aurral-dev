@@ -14,4 +14,5 @@ test("hold remote transfer lease through polling only for same attempt and provi
   assert.equal(holdsRemoteTransferAcrossHandoff(base, { ...base, phase: "finalize" }), false);
   assert.equal(holdsRemoteTransferAcrossHandoff(base, { ...base, phase: "poll", downloadAttemptId: "b" }), false);
   assert.equal(holdsRemoteTransferAcrossHandoff(base, { ...base, phase: "poll", source: "ytdlp" }), false);
+  assert.equal(holdsRemoteTransferAcrossHandoff({ ...base, phase: "poll" }, { ...base, phase: "download" }), false);
 });

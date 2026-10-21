@@ -8,7 +8,8 @@ import { BackgroundEncodeSlots } from "./downloadJobs/backgroundEncodeSlots.js";
 
 const DEFAULT_BINARY = "yt-dlp";
 const SEARCH_LIMIT = 5;
-const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+// Stalls are controlled separately by the 5-minute no-progress watchdog.
+const DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000;
 const AUDIO_FORMAT = "m4a";
 const activeDownloads = new Map();
 // Opt-in end-to-end yt-dlp limiter. yt-dlp owns FFmpeg postprocessing,
