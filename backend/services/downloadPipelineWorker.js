@@ -15,7 +15,7 @@ import { logger, safeLogDiagnostic } from "./logger.js";
 import { recordAlbumGrabQueued, recordAlbumGrabPhase } from "./albumGrabActivity.js";
 import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { withDownloadPayloadMutation } from "./downloadJobs/mutationGuards.js";
-import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservationsCooperatively, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
+import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, parkPipelineProvider, reconcilePipelineReservationsCooperatively, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
 
 async function processLockedPipelineJob(payload, dependencies = {}) {
   const processPayload = dependencies.processPipelinePayload || processPipelinePayload;
@@ -40,6 +40,7 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
       releaseAlbumGrabJobs(payload, ALBUM_GRAB_ENDED_REASON);
     }
     await continuePayload(nextPayload);
+    if (nextPayload && providerSchedulerEnabled()) parkPipelineProvider(payload, nextPayload);
   } catch (error) {
     outcome = "error";
     if (payload?.manualSelection !== true) throw error;

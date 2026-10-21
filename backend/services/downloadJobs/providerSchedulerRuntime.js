@@ -56,7 +56,7 @@ export function getProviderSchedulerPolicies() {
 }
 
 export function getProviderSchedulerCapacity() {
-  const active = new Map(getActive.all().map((entry) => [entry.provider_id, entry.count]));
+  const active = new Map(getActive.all(stage).map((entry) => [entry.provider_id, entry.count]));
   return getProviderSchedulerPolicies().map((policy) => ({
     ...policy,
     active: active.get(policy.id) || 0,
