@@ -273,7 +273,10 @@ const pipeline = registerQueue({
     getPipelinePriorityForPhase(payload?.phase) - (payload?.upgrade ? 100 : 0),
 });
 export const getPipelineQueue = pipeline.getQueue;
-export const enqueuePipelineJob = pipeline.enqueueJob;
+export function enqueuePipelineJob(payload, options = {}) {
+  // Capture initial queue delay as well as all intermediate durable handoffs.
+  return pipeline.enqueueJob({ ...payload, traceEnqueuedAtMs: Date.now() }, options);
+}
 
 const discoveryRefresh = registerQueue({
   name: "discovery-refresh",

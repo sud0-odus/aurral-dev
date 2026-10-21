@@ -3,7 +3,7 @@ import { expandAlbumGrabHistory } from "./albumGrabActivity.js";
 import { dbOps } from "../db/helpers/index.js";
 import { resolveBlockedJobReleaseTitle, resolveBlockedJobSourceFilename } from "./downloadUtils.js";
 import { flowPlaylistConfig } from "./playlists/flowPlaylistConfig.js";
-import { getLibraryForAlbumReferences } from "./libraryQueryService.js";
+import { resolveLibraryAlbumId } from "./libraryQueryService.js";
 
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_TRACK_JOB_MS = 15 * 60 * 1000;
@@ -47,11 +47,8 @@ const buildPlaylistHref = (playlistId) => {
 const buildTrackJobHref = (job) => {
   const playlistId = job?.playlistId || job?.playlistType;
   if (playlistId === "library" && job?.albumMbid) {
-    const album = getLibraryForAlbumReferences({
-      source: "all",
-      references: [job.albumMbid],
-    }).albums[0];
-    if (album?.id != null) return `/library/album/${album.id}`;
+    const albumId = resolveLibraryAlbumId(job.albumMbid);
+    if (albumId != null) return `/library/album/${albumId}`;
   }
   return buildPlaylistHref(playlistId);
 };
@@ -1194,8 +1191,8 @@ export const getAurralHistoryRequests = async (lidarrClient = null, user = null)
   const resolveCanonicalAlbumId = (albumMbid) => {
     if (!albumMbid) return null;
     if (!canonicalAlbumIds.has(albumMbid)) {
-      const album = getLibraryForAlbumReferences({ source: "all", references: [albumMbid] }).albums[0];
-      canonicalAlbumIds.set(albumMbid, album?.id != null ? String(album.id) : null);
+      const albumId = resolveLibraryAlbumId(albumMbid);
+      canonicalAlbumIds.set(albumMbid, albumId != null ? String(albumId) : null);
     }
     return canonicalAlbumIds.get(albumMbid);
   };

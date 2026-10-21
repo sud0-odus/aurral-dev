@@ -79,6 +79,11 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
     upgradeForJobId: payload.upgradeForJobId || null,
   };
   const { queries, fallbackQuery } = buildYtdlpSearchQueries(resolvedTrack);
+  // The deadline covers inspection + all search queries, not each subprocess
+  // separately. The subprocess cancellation poll kills the process group.
+  const deadline = Date.now() + 60000;
+  const searchCancelled = () => !isPipelinePayloadActive(payload) || Date.now() >= deadline;
+  const timeRemaining = () => Math.max(1000, deadline - Date.now());
   const deniedIds = new Set(
     (Array.isArray(job.deniedRemoteSources) ? job.deniedRemoteSources : [])
       .filter((entry) => Array.isArray(entry) && entry[0] === "ytdlp")
@@ -92,7 +97,7 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
   const sourceVideoId = String(job.sourceVideoId || "").trim();
   if (/^[A-Za-z0-9_-]{11}$/.test(sourceVideoId) && !deniedIds.has(sourceVideoId)) {
     try {
-      const original = await ytdlpClient.inspectVideo(sourceVideoId);
+      const original = await ytdlpClient.inspectVideo(sourceVideoId, { shouldCancel: searchCancelled, timeoutMs: timeRemaining() });
       if (original && !isYtdlpLiveResult(original)) {
         mergeSearchResults(aggregated, seen, [original], (entry) =>
           String(entry.id || entry.url || "").trim().toLowerCase(),
@@ -107,10 +112,11 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
     }
   }
   for (const query of [...queries, fallbackQuery].filter(Boolean)) {
+    if (Date.now() >= deadline) break;
     if (hasEnoughCandidates(aggregated, resolvedTrack)) break;
     if (query === fallbackQuery && aggregated.length > 0) break;
     try {
-      const results = await ytdlpClient.search(query, { limit: 5 });
+      const results = await ytdlpClient.search(query, { limit: 5, shouldCancel: searchCancelled, timeoutMs: timeRemaining() });
       mergeSearchResults(aggregated, seen, results.filter((entry) => !deniedIds.has(String(entry.id || "").trim())), (entry) =>
         String(entry.id || entry.url || "").trim().toLowerCase(),
       );
@@ -123,6 +129,11 @@ async function handleYtdlpSearchUnlocked(payload, helpers) {
       });
     }
   }
+
+  if (Date.now() >= deadline && aggregated.length === 0) {
+    return helpers.failOrTryNextSource(payload, job, "yt-dlp search exceeded 60 seconds; review source or retry");
+  }
+  if (!isPipelinePayloadActive(payload)) return null;
 
   // Live streams are not recordings of the requested track.
   const downloadableResults = aggregated.filter(
@@ -185,6 +196,7 @@ async function handleYtdlpDownload(payload, helpers) {
   try {
     downloaded = await ytdlpClient.downloadAudio(url, {
       jobId: job.id,
+      videoId: candidate?.raw?.id,
       shouldCancel: () => !isPipelinePayloadActive(payload),
     });
   } catch (error) {
@@ -292,7 +304,10 @@ async function handleYtdlpFinalize(payload, helpers) {
   const finalName = buildTrackFileName(job, ext || ".m4a");
   const finalPath = path.join(finalDir, finalName);
   const committed = await withPipelineCommitLock(payload, async () => {
-    await writeAudioMetadata(filePath, resolvedTrack);
+    // Preserve WebM/Matroska audio: node-taglib-sharp cannot write tags to it.
+    if (![".webm", ".mka", ".mkv"].includes(ext)) {
+      await writeAudioMetadata(filePath, resolvedTrack);
+    }
     import("./aurralHistoryService.js")
       .then(({ recordTrackJobMoving }) => recordTrackJobMoving(job))
       .catch((err) => {

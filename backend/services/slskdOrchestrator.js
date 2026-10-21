@@ -87,16 +87,16 @@ const TRANSFER_RESET = Object.freeze({
   tailSince: null,
 });
 const ALBUM_TRANSFER_RESET = Object.freeze({ ...TRANSFER_RESET, albumTransfers: null });
-const STALLED_TRANSFER_MS = 30 * 60 * 1000;
-const QUEUED_TRANSFER_MS = 10 * 60 * 1000;
-const TAIL_ALBUM_TRANSFER_MS = 20 * 60 * 1000;
+const STALLED_TRANSFER_MS = 5 * 60 * 1000;
+const QUEUED_TRANSFER_MS = 5 * 60 * 1000;
+const TAIL_ALBUM_TRANSFER_MS = 5 * 60 * 1000;
 const searchMonitors = createCache(10 * 60, 100);
 const MIN_SEARCH_CANDIDATES = 3;
 const MAX_DOWNLOAD_CANDIDATES = 7;
 const MAX_TRANSFER_RETRIES_PER_CANDIDATE = 1;
 const POLL_DELAY_SECONDS = 3;
 const SOULSEEK_LOGIN_RECHECK_SECONDS = 60;
-const SOULSEEK_LOGIN_WAIT_LIMIT_MS = 45 * 60 * 1000;
+const SOULSEEK_LOGIN_WAIT_LIMIT_MS = 60 * 1000;
 export const SLSKD_NOT_CONFIGURED_MESSAGE =
   "slskd is not configured. Enable slskd and add its Server URL in Settings > Download clients to enable Soulseek downloads for flows and playlists.";
 
@@ -714,7 +714,9 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     }
     mergeSearchResults(aggregated, seen, cached, searchResultKey);
   }
-  const isCancelled = () => !isPipelinePayloadActive(payload);
+  const searchTimedOut = () => Number(payload.searchStartedAt) > 0
+    && Date.now() - Number(payload.searchStartedAt) >= 60000;
+  const isCancelled = () => !isPipelinePayloadActive(payload) || searchTimedOut();
   const enough = (results) => hasSlskdSearchCandidates(results, resolvedTrack, searchOptions);
   const activeSearch = payload.activeSearch?.query === queries[index] ? payload.activeSearch : null;
   if (payload.activeSearch && !activeSearch) {
@@ -740,6 +742,8 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     }
     if (isCancelled()) {
       searchMonitors.delete(activeSearch.id);
+      await stopSearch(activeSearch.id);
+      if (searchTimedOut() && isPipelinePayloadActive(payload)) return { timedOut: true };
       return { cancelled: true };
     }
     if (!result.done) {
@@ -781,6 +785,7 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
     }
     if (isCancelled()) {
       await stopSearch(created.id);
+      if (searchTimedOut() && isPipelinePayloadActive(payload)) return { timedOut: true };
       return { cancelled: true };
     }
     return { payload: {
@@ -799,6 +804,15 @@ async function handleSearch(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
+  const searchStartedAt = Number(payload.searchStartedAt) || Date.now();
+  if (Date.now() - searchStartedAt >= 60000) {
+    if (payload.activeSearch?.id) {
+      searchMonitors.delete(payload.activeSearch.id);
+      await stopSearch(payload.activeSearch.id);
+    }
+    return helpers.failOrTryNextSource(payload, job, "Soulseek search exceeded 60 seconds; review candidates or retry");
+  }
+  payload = { ...payload, searchStartedAt };
   if (await isStillLoggedOut(payload)) return waitForSoulseekLogin(payload, job, helpers);
   if (payload.soulseekLoggedOutSince) {
     payload = { ...payload, soulseekLoggedOutSince: null };
@@ -842,6 +856,8 @@ async function handleSearch(payload, helpers) {
     searchOptions,
   );
   if (step.cancelled || !isPipelinePayloadActive(payload)) return null;
+  if (step.timedOut) return helpers.failOrTryNextSource(payload, job,
+    "Soulseek search exceeded 60 seconds; review source or retry");
   if (step.loggedOut) return waitForSoulseekLogin(step.payload, job, helpers, step.loggedOut.message);
   if (step.payload) return step.payload;
   const { aggregated, searchIds, queryCount } = step;
@@ -994,6 +1010,21 @@ async function handleDownload(payload, helpers) {
     return helpers.failOrTryNextSource(payload, job, "No download candidate available");
   }
   const searchId = payload.searchId || null;
+  // Reattach to an existing remote transfer after a worker restart instead
+  // of submitting the same file a second time. Provider state is authoritative.
+  if (job.downloadClientId
+    && job.remoteUsername === candidate.raw.user
+    && job.remoteFilename === candidate.raw.file) {
+    const priorTransfer = await slskdClient.getTransfer(
+      job.remoteUsername, job.downloadClientId).catch(() => null);
+    if (priorTransfer) {
+      return {
+        ...payload, phase: "poll", candidate, candidateIndex: index,
+        legacyTransfer: { id: job.downloadClientId, username: job.remoteUsername },
+        pollAttempts: 0,
+      };
+    }
+  }
   updateSlskdMetaStmt.run(searchId, null, candidate.raw.user, candidate.raw.file, job.id);
   downloadTracker.updateDownloadMetadata(job.id, {
     downloadSource: "slskd",
@@ -1067,10 +1098,12 @@ async function handleDownload(payload, helpers) {
 // the bytes, and the queue position count as progress.
 function readTransferProgress(transfer) {
   if (!transfer) return "missing";
+  // Queue position changes do not mean bytes are transferring. Count a
+  // transition to active and actual byte changes; five minutes without either
+  // is an actionable stalled/queued transfer.
   return [
     classifyTransferState(readTransferState(transfer)),
     transfer.bytesTransferred ?? transfer.BytesTransferred ?? "",
-    transfer.placeInQueue ?? transfer.PlaceInQueue ?? "",
   ].join("|");
 }
 
@@ -1093,8 +1126,7 @@ function isQueuedUntouched(transfer) {
 }
 
 // Once every other file of the album finished or failed, the rest get a
-// limited window: files still in the uploader's queue 10 minutes, a file
-// still transferring 20. Then the album imports what finished and moves on.
+// A stalled album tail is bounded to five minutes whether queued or transferring.
 function albumTailWindow(transfers) {
   const pending = transfers.filter((transfer) => !transfer
     || classifyTransferState(readTransferState(transfer)) === "pending");
@@ -1120,7 +1152,7 @@ async function handlePoll(payload, helpers) {
     const tailWindow = albumTailWindow(transfers);
     const tailSince = tailWindow ? Number(payload.tailSince) || Date.now() : null;
     // A folder whose files all still wait untouched in the uploader's queue
-    // gets 10 minutes, as a single file does, before the next folder.
+    // gets five minutes before the next folder.
     const queuedTooLong = transfers.every((transfer) => transfer && isQueuedUntouched(transfer))
       && Date.now() - progress.lastProgressAt > QUEUED_TRANSFER_MS;
     if (!progress.stalled && !queuedTooLong && !(tailSince && Date.now() - tailSince > tailWindow)) {
@@ -1191,7 +1223,7 @@ async function handlePoll(payload, helpers) {
     }
   }
   const progress = trackTransferProgress(basePayload, readTransferProgress(transfer));
-  // A file another user also has waits only 10 minutes in an uploader's queue.
+  // A file another user also has waits only five minutes in an uploader's queue.
   const queuedTooLong = transfer && isQueuedUntouched(transfer) && hasNextCandidate(basePayload)
     && Date.now() - progress.lastProgressAt > QUEUED_TRANSFER_MS;
   if (!progress.stalled && !queuedTooLong) {

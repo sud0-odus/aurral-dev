@@ -15,6 +15,9 @@ import { recordAlbumGrabQueued, recordAlbumGrabPhase } from "./albumGrabActivity
 import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { withDownloadPayloadMutation } from "./downloadJobs/mutationGuards.js";
 import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservationsCooperatively, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
+import { holdsRemoteTransferAcrossHandoff } from "./downloadJobs/pipelineCapacityStages.js";
+import { startPipelineDiagnostics, stopPipelineDiagnostics, tracePipelineClaim, tracePipelineFinish, tracePipelineDeferred } from "./downloadJobs/pipelineDiagnostics.js";
+import { isSupersededPipelinePayload } from "./downloadJobs/pipelineSequenceGuard.js";
 
 async function processLockedPipelineJob(payload, dependencies = {}) {
   const processPayload = dependencies.processPipelinePayload || processPipelinePayload;
@@ -25,14 +28,21 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
       recordAlbumGrabQueued(payload, downloadTracker.getAll());
       recordAlbumGrabPhase(payload);
     }
+    const started = Date.now();
     const nextPayload = await processPayload(payload);
-    if (providerSchedulerEnabled() && nextPayload == null) releasePipelineProvider(payload);
+    const elapsedMs = Date.now() - started;
+    tracePipelineFinish(payload, nextPayload, elapsedMs);
     if (nextPayload?.albumGrab === true) recordAlbumGrabPhase(nextPayload);
     if (payload?.albumGrab === true
       && !(nextPayload?.albumGrab === true && isPipelinePayloadActive(nextPayload))) {
       releaseAlbumGrabJobs(payload, ALBUM_GRAB_ENDED_REASON);
     }
+    // The next stage must be persisted before releasing this stage's lease.
+    // A stage-qualified release protects a concurrently claimed continuation.
     await continuePayload(nextPayload);
+    if (providerSchedulerEnabled() && !holdsRemoteTransferAcrossHandoff(payload, nextPayload)) {
+      releasePipelineProvider(payload);
+    }
   } catch (error) {
     if (payload?.manualSelection !== true) throw error;
     const message = safeLogDiagnostic(error) || "Manual download failed";
@@ -46,10 +56,15 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
 }
 
 export function processPipelineJob(payload, dependencies = {}) {
+  if (isSupersededPipelinePayload(payload)) return;
   return withDownloadPayloadMutation(payload, async (current) => {
+    // Re-check after waiting for per-job mutation exclusion.
+    if (isSupersededPipelinePayload(current)) return;
+    tracePipelineClaim(current);
     if (providerSchedulerEnabled() && !current?.manualSelection) {
       const reserved = reservePipelineProvider(current);
       if (!reserved) {
+        tracePipelineDeferred(current);
         await (dependencies.continuePipeline || continuePipeline)({ ...current, delaySeconds: 2 });
         return;
       }
@@ -102,9 +117,11 @@ const pipelineConsumers = Array.from({ length: 16 }, (_, index) => createHonkerW
 }));
 
 export function startDownloadPipelineWorker() {
+  startPipelineDiagnostics();
   for (const consumer of pipelineConsumers) consumer.start();
 }
 export async function stopDownloadPipelineWorker() {
+  stopPipelineDiagnostics();
   await Promise.all(pipelineConsumers.map((consumer) => consumer.stop()));
 }
 export function isDownloadPipelineWorkerRunning() {

@@ -5,15 +5,21 @@ import path from "path";
 import { dbOps } from "../db/helpers/index.js";
 import { resolveYtdlpStagingRoot } from "./downloadFolderConfig.js";
 import { BackgroundEncodeSlots } from "./downloadJobs/backgroundEncodeSlots.js";
+import { createYtdlpProgressObserver } from "./downloadJobs/ytdlpProgress.js";
 
 const DEFAULT_BINARY = "yt-dlp";
 const SEARCH_LIMIT = 5;
-const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+// Stalls are controlled separately by the 5-minute no-progress watchdog.
+const DOWNLOAD_TIMEOUT_MS = 60 * 60 * 1000;
 const AUDIO_FORMAT = "m4a";
 const activeDownloads = new Map();
 // Opt-in end-to-end yt-dlp limiter. yt-dlp owns FFmpeg postprocessing,
 // so this caps *acquisition + conversion*, not conversion alone.
-const pipelineLimit = Number(process.env.AURRAL_YTDLP_PIPELINE_LIMIT || 0);
+// Honor the provider setting while stage-aware scheduling is active.
+const configured = Number(dbOps.getSettings()?.integrations?.ytdlp?.maxActive);
+const schedulerLimit = Number.isFinite(configured) && configured >= 1 ? Math.min(8, Math.floor(configured)) : 3;
+const pipelineLimit = process.env.AURRAL_PROVIDER_SCHEDULER === "1"
+  ? schedulerLimit : Number(process.env.AURRAL_YTDLP_PIPELINE_LIMIT || 0);
 const pipelineSlots = Number.isSafeInteger(pipelineLimit) && pipelineLimit > 0
   ? new BackgroundEncodeSlots(pipelineLimit)
   : null;
@@ -55,6 +61,13 @@ export const ytdlpSettings = Object.freeze({
       section: "Behavior",
     }),
     Object.freeze({
+      key: "preserveSourceAudio",
+      label: "Preserve original audio format (experimental)",
+      type: "toggle",
+      section: "Downloads",
+      hint: "Skip forced AAC/M4A conversion. Original Opus/WebM may not match existing quality tiers; test before enabling on a production library.",
+    }),
+    Object.freeze({
       key: "stagingPath",
       label: "Staging path",
       type: "path",
@@ -62,7 +75,7 @@ export const ytdlpSettings = Object.freeze({
       hint: "Temporary downloads stay here until imported.",
     }),
   ]),
-  defaults: Object.freeze({ enabled: true, priority: 50, stagingPath: "" }),
+  defaults: Object.freeze({ enabled: true, priority: 50, stagingPath: "", preserveSourceAudio: false }),
   validation: Object.freeze({ required: [], url: [] }),
   testConnection: true,
 });
@@ -110,7 +123,7 @@ function isConfiguredFor(config = null) {
   return isEnabledFor(config) && resolveBinaryExists(getBinaryPath());
 }
 
-function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
+function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCancel } = {}) {
   return new Promise((resolve, reject) => {
     const isolatedProcessGroup = process.platform !== "win32";
     const child = spawn(getBinaryPath(), buildYtdlpInvocationArgs(args), {
@@ -133,6 +146,16 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
     let settled = false;
     let terminationError = null;
     let forcedKillTimer = null;
+    let lastTransferProgressAt = Date.now();
+    const progressWatch = idleTimeoutMs > 0 ? setInterval(() => {
+      if (terminationError || Date.now() - lastTransferProgressAt < idleTimeoutMs) return;
+      const error = new Error("yt-dlp transfer stalled: no progress for five minutes; review this job");
+      error.code = "TRANSFER_STALLED";
+      terminationError = error;
+      signalProcess("SIGTERM");
+      forcedKillTimer = setTimeout(() => signalProcess("SIGKILL"), 1000);
+    }, 1000) : null;
+    progressWatch?.unref?.();
     const timer = setTimeout(() => {
       const error = new Error(`yt-dlp timed out after ${timeoutMs}ms`);
       error.code = "DOWNLOAD_TIMEOUT";
@@ -159,6 +182,7 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       clearTimeout(timer);
       if (forcedKillTimer) clearTimeout(forcedKillTimer);
       if (cancellationTimer) clearInterval(cancellationTimer);
+      if (progressWatch) clearInterval(progressWatch);
     }
     function settleReject(error) {
       if (settled) return;
@@ -166,11 +190,20 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       clearTimers();
       reject(error);
     }
+    const progressObserver = idleTimeoutMs > 0
+      ? createYtdlpProgressObserver(() => { lastTransferProgressAt = Date.now(); })
+      : null;
+    const readProgress = (output, stream) => progressObserver?.(output, stream);
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const output = chunk.toString();
+      // Searches use stdout for JSON; downloads only need a bounded tail.
+      stdout = idleTimeoutMs > 0 ? (stdout + output).slice(-8192) : stdout + output;
+      readProgress(output, "stdout");
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const output = chunk.toString();
+      stderr = (stderr + output).slice(-8192);
+      readProgress(output, "stderr");
     });
     child.on("error", (error) => {
       settleReject(error);
@@ -215,7 +248,7 @@ async function testConnectionFor(config = null, { force: _force = false } = {}) 
   }
 }
 
-async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
+async function searchFor(_config = null, query, { limit = SEARCH_LIMIT, shouldCancel, timeoutMs = 60000 } = {}) {
   const trimmed = String(query || "").trim();
   if (!trimmed) return [];
   const capped = Math.min(Math.max(Number(limit) || SEARCH_LIMIT, 1), 10);
@@ -227,7 +260,7 @@ async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
       "--no-warnings",
       `ytsearch${capped}:${trimmed}`,
     ],
-    { timeoutMs: 60000 },
+    { timeoutMs, shouldCancel },
   );
   const results = [];
   for (const line of String(stdout || "").split("\n")) {
@@ -256,13 +289,13 @@ async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
   return results;
 }
 
-async function inspectVideoFor(_config = null, videoId) {
+async function inspectVideoFor(_config = null, videoId, { shouldCancel, timeoutMs = 60000 } = {}) {
   const id = String(videoId || "").trim();
   if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
   const url = `https://www.youtube.com/watch?v=${id}`;
   const { stdout } = await runYtdlp(
     ["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", "--", url],
-    { timeoutMs: 60000 },
+    { timeoutMs, shouldCancel },
   );
   const entry = JSON.parse(stdout);
   if (String(entry.id || "") !== id) return null;
@@ -285,36 +318,45 @@ function resolveStagingDir(config, jobId) {
   );
 }
 
-async function findDownloadedAudio(dir) {
+async function findDownloadedAudio(dir, videoId = null) {
   const entries = await fsPromises.readdir(dir).catch(() => []);
   const audioExt = new Set([".m4a", ".mp3", ".opus", ".flac", ".ogg", ".webm", ".wav"]);
   for (const name of entries) {
     const full = path.join(dir, name);
     if (!audioExt.has(path.extname(name).toLowerCase())) continue;
+    if (videoId && path.parse(name).name !== videoId) continue;
     const stat = await fsPromises.stat(full).catch(() => null);
     if (stat?.isFile() && stat.size > 0) return full;
   }
   return null;
 }
 
-async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel } = {}) {
+async function downloadAudioFor(config = null, videoUrl, { jobId, videoId, shouldCancel } = {}) {
   const url = String(videoUrl || "").trim();
   if (!url) throw new Error("Missing yt-dlp download URL");
   const stagingDir = resolveStagingDir(config, jobId);
+  // The remote acquisition may have completed immediately before a worker
+  // crash. A finished yt-dlp output is named <video-id>.<ext>; only reuse an
+  // exact candidate ID and still validate it in the normal finalize phase.
+  const identity = /^[A-Za-z0-9_-]{11}$/.test(String(videoId || "")) ? String(videoId) : null;
+  const recovered = identity ? await findDownloadedAudio(stagingDir, identity) : null;
+  if (recovered) {
+    if (shouldCancel?.() === true) throw new Error("yt-dlp recovery cancelled");
+    return { filePath: recovered, stagingDir, recovered: true };
+  }
   await fsPromises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   await fsPromises.mkdir(stagingDir, { recursive: true });
   const outTemplate = path.join(stagingDir, "%(id)s.%(ext)s");
+  const preserveSourceAudio = getSettings(config).preserveSourceAudio === true;
   const args = [
     "--no-playlist",
     "--no-warnings",
-    "-x",
-    "--embed-metadata",
+    "--newline",
+    "--progress-template", "download:__AURRAL_BYTES__:%(progress.downloaded_bytes)s:%(progress._percent_str)s",
+    ...(preserveSourceAudio ? ["-f", "bestaudio/best"] : ["-x", "--embed-metadata"]),
     "--parse-metadata",
     "title:^(?P<artist>.+?)\\s+[-–—]\\s+(?P<title>.+)$",
-    "--audio-format",
-    AUDIO_FORMAT,
-    "--audio-quality",
-    "0",
+    ...(!preserveSourceAudio ? ["--audio-format", AUDIO_FORMAT, "--audio-quality", "0"] : []),
     "-o",
     outTemplate,
     "--",
@@ -323,11 +365,11 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel }
   try {
     await withPipelineSlot(async () => {
       try {
-        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
+        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, idleTimeoutMs: 300000, cwd: stagingDir, shouldCancel });
       } catch (error) {
         // Keep the slot through the retry so retried downloads cannot exceed the cap.
         if (!/HTTP Error 403/u.test(error?.message || "")) throw error;
-        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
+        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, idleTimeoutMs: 300000, cwd: stagingDir, shouldCancel });
       }
     }, shouldCancel);
   } catch (error) {
@@ -380,8 +422,8 @@ export class YtdlpClient {
   search(query, options) {
     return searchFor(this._config, query, options);
   }
-  inspectVideo(videoId) {
-    return inspectVideoFor(this._config, videoId);
+  inspectVideo(videoId, options) {
+    return inspectVideoFor(this._config, videoId, options);
   }
 
   downloadAudio(videoUrl, options) {

@@ -3,6 +3,7 @@ import { dbOps } from "../../db/helpers/index.js";
 import { getDownloadSourceStatus } from "../downloadSourceService.js";
 import { planProviderDispatch, PROVIDER_SOURCES } from "./providerSchedulerPolicy.js";
 import { recordDownloadEvent } from "./downloadEventHistory.js";
+import { capacityStageForPayload } from "./pipelineCapacityStages.js";
 
 // Opt-in until the real provider integrations have been exercised in staging.
 export const providerSchedulerEnabled = () => process.env.AURRAL_PROVIDER_SCHEDULER === "1";
@@ -12,6 +13,7 @@ db.exec(`
     job_id TEXT PRIMARY KEY,
     attempt_id TEXT NOT NULL,
     provider_id TEXT,
+    stage TEXT NOT NULL DEFAULT 'search',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
@@ -19,13 +21,45 @@ db.exec(`
     ON download_provider_reservations(provider_id);
 `);
 
+// Upgrade existing reservations without deleting or resetting in-flight attempts.
+if (!db.prepare("PRAGMA table_info(download_provider_reservations)").all().some((row) => row.name === "stage")) {
+  db.exec("ALTER TABLE download_provider_reservations ADD COLUMN stage TEXT NOT NULL DEFAULT 'search'");
+  // Adopt the actual current phase of PR41 reservations. Assigning every
+  // migrated lease to 'search' would strand active poll/finalize attempts.
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = '_honker_live'").get()) {
+    db.exec(`UPDATE download_provider_reservations SET stage = COALESCE((
+    SELECT CASE
+      WHEN json_extract(h.payload, '$.phase') IN ('download','poll','transfer','await','monitor') THEN 'transfer'
+      WHEN json_extract(h.payload, '$.phase') IN ('finalize','validate','import','complete') THEN 'finalize'
+      ELSE 'search'
+    END FROM _honker_live h
+    WHERE h.queue = 'slskd-pipeline'
+      AND json_valid(h.payload)
+      AND json_extract(h.payload, '$.jobId') = download_provider_reservations.job_id
+      AND json_extract(h.payload, '$.downloadAttemptId') = download_provider_reservations.attempt_id
+    ORDER BY h.id DESC LIMIT 1
+  ), 'search')`);
+  }
+}
 const getReservation = db.prepare("SELECT * FROM download_provider_reservations WHERE job_id = ?");
-const getActive = db.prepare("SELECT provider_id, COUNT(*) AS count FROM download_provider_reservations WHERE provider_id IS NOT NULL GROUP BY provider_id");
+// Honker creates _honker_live lazily. Never prepare queries against it at
+// module import: tests and first-run startup may not have initialized Honker.
+function hasOldAttemptMessage(jobId, attemptId) {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = '_honker_live'").get()) return false;
+  return Boolean(db.prepare(`SELECT 1 FROM _honker_live
+    WHERE queue = 'slskd-pipeline' AND json_valid(payload)
+      AND json_extract(payload, '$.jobId') = ?
+      AND json_extract(payload, '$.downloadAttemptId') = ?
+    LIMIT 1`).get(jobId, attemptId));
+}
+const hasExternalProviderWork = db.prepare("SELECT 1 FROM weekly_flow_download_provider_work WHERE job_id = ? LIMIT 1");
+const getActive = db.prepare("SELECT provider_id, stage, COUNT(*) AS count FROM download_provider_reservations WHERE provider_id IS NOT NULL GROUP BY provider_id, stage");
 const insertReservation = db.prepare(`INSERT INTO download_provider_reservations
-  (job_id, attempt_id, provider_id, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?)`);
-const updateReservation = db.prepare("UPDATE download_provider_reservations SET provider_id = ?, updated_at = ? WHERE job_id = ? AND attempt_id = ?");
+  (job_id, attempt_id, provider_id, stage, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?)`);
+const updateReservation = db.prepare("UPDATE download_provider_reservations SET provider_id = ?, stage = ?, updated_at = ? WHERE job_id = ? AND attempt_id = ?");
 const deleteReservation = db.prepare("DELETE FROM download_provider_reservations WHERE job_id = ? AND attempt_id = ?");
+const releaseStageReservation = db.prepare("DELETE FROM download_provider_reservations WHERE job_id = ? AND attempt_id = ? AND stage = ?");
 const deleteByJob = db.prepare("DELETE FROM download_provider_reservations WHERE job_id = ?");
 
 function limit(value, fallback) {
@@ -44,6 +78,7 @@ export function getProviderSchedulerPolicies() {
     priority: Number.isFinite(Number(settings[id]?.priority))
       ? Number(settings[id].priority) : priority,
     maxActive: limit(settings[id]?.maxActive, defaultSlots),
+    searchMaxActive: limit(settings[id]?.searchMaxActive, 2),
   });
   return [
     create("slskd", source.slskd.configured, source.slskd.priority, 3),
@@ -55,18 +90,21 @@ export function getProviderSchedulerPolicies() {
   ];
 }
 
-export function getProviderSchedulerCapacity() {
-  const active = new Map(getActive.all().map((entry) => [entry.provider_id, entry.count]));
+export function getProviderSchedulerCapacity(stage = "transfer") {
+  const active = new Map(getActive.all().map((entry) => [`${entry.provider_id}:${entry.stage}`, entry.count]));
   return getProviderSchedulerPolicies().map((policy) => ({
     ...policy,
-    active: active.get(policy.id) || 0,
+    // Search, acquisition and import no longer compete for the same quota.
+    maxActive: stage === "search" ? policy.searchMaxActive : stage === "finalize" ? 2 : policy.maxActive,
+    active: active.get(`${policy.id}:${stage}`) || 0,
   }));
 }
 
 export function getProviderSchedulerStats() {
-  return { enabled: providerSchedulerEnabled(), providers: getProviderSchedulerCapacity().map((p) => ({
+  const build = (stage) => getProviderSchedulerCapacity(stage).map((p) => ({
     ...p, available: p.enabled ? Math.max(0, p.maxActive - p.active) : 0,
-  })) };
+  }));
+  return { enabled: providerSchedulerEnabled(), providers: build("transfer"), searches: build("search"), finalizers: build("finalize") };
 }
 
 export function providerSchedulerMaxWorkers() {
@@ -91,16 +129,28 @@ function candidateJob(payload) {
 export function reservePipelineProvider(payload) {
   if (!providerSchedulerEnabled() || !payload?.jobId || !payload?.downloadAttemptId) return payload;
   return db.transaction(() => {
-    const old = getReservation.get(payload.jobId);
-    if (old && old.attempt_id !== payload.downloadAttemptId) return null;
-    const policies = getProviderSchedulerCapacity();
+    let old = getReservation.get(payload.jobId);
+    if (old && old.attempt_id !== payload.downloadAttemptId) {
+      // An old attempt must not permanently block the replacement. Do not
+      // reclaim while its queue message or remote provider work still exists.
+      if (hasOldAttemptMessage(payload.jobId, old.attempt_id)
+        || hasExternalProviderWork.get(payload.jobId)) return null;
+      deleteByJob.run(payload.jobId);
+      old = null;
+      recordDownloadEvent({ jobId: payload.jobId, attemptId: payload.downloadAttemptId,
+        category: "scheduler", event: "orphan_reservation_recovered" });
+    }
+    const stage = capacityStageForPayload(payload);
+    // Finalization has its own small pool; it never counts against active
+    // transfers or searches but is still bounded to protect playback latency.
+    const policies = getProviderSchedulerCapacity(stage);
     const active = policies.map((p) => ({
-      ...p, active: Math.max(0, p.active - (old?.provider_id === p.id ? 1 : 0)),
+      ...p, active: Math.max(0, p.active - (old?.provider_id === p.id && old?.stage === stage ? 1 : 0)),
     }));
     const request = candidateJob(payload);
-    if (old?.provider_id && payload.providerId === old.provider_id) {
+    if (old?.provider_id && payload.providerId === old.provider_id && old.stage === stage) {
       // A multi-phase provider attempt holds its slot until completion/fallback.
-      return payload;
+      return { ...payload, delaySeconds: null };
     }
     const desired = String(payload.providerId || "").trim();
     // A continuation or a source fallback must stay with its selected source.
@@ -115,20 +165,21 @@ export function reservePipelineProvider(payload) {
     if (!assignment) {
       // Release the old provider slot while waiting for fallback capacity,
       // but preserve the attempt's exclusivity across the delayed Honker step.
-      if (old) updateReservation.run(null, Date.now(), payload.jobId, payload.downloadAttemptId);
+      if (old) updateReservation.run(null, stage, Date.now(), payload.jobId, payload.downloadAttemptId);
       return null;
     }
     const now = Date.now();
     if (old) {
-      updateReservation.run(assignment.providerId, now, payload.jobId, payload.downloadAttemptId);
+      updateReservation.run(assignment.providerId, stage, now, payload.jobId, payload.downloadAttemptId);
     } else {
-      insertReservation.run(payload.jobId, payload.downloadAttemptId, assignment.providerId, now, now);
+      insertReservation.run(payload.jobId, payload.downloadAttemptId, assignment.providerId, stage, now, now);
     }
-    if(old?.provider_id!==assignment.providerId) recordDownloadEvent({
-      jobId:payload.jobId,category:"scheduler",event:"provider_selected",provider:assignment.providerId});
+    if(old?.provider_id!==assignment.providerId || old?.stage !== stage) recordDownloadEvent({
+      jobId:payload.jobId,category:"scheduler",event:"capacity_reserved",provider:assignment.providerId, attemptId:payload.downloadAttemptId, detail:stage});
     return {
       ...payload,
       ...assignment,
+      delaySeconds: null,
       providerId: assignment.providerId,
       source: assignment.source,
       ...(assignment.downloadClient ? { downloadClient: assignment.downloadClient } : { downloadClient: null }),
@@ -139,7 +190,9 @@ export function reservePipelineProvider(payload) {
 
 export function releasePipelineProvider(payload) {
   if (!providerSchedulerEnabled() || !payload?.jobId || !payload?.downloadAttemptId) return 0;
-  return deleteReservation.run(payload.jobId, payload.downloadAttemptId).changes;
+  // A continuation may have claimed the next stage already. Never delete its
+  // reservation when releasing the previous stage after durable enqueue.
+  return releaseStageReservation.run(payload.jobId, payload.downloadAttemptId, capacityStageForPayload(payload)).changes;
 }
 
 export function revokePipelineProviderJob(jobId) {
