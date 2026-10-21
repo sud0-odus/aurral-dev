@@ -17,13 +17,14 @@ if (!window.location.pathname.endsWith("/oauth.html")) {
 // Browser-side response/performance instrumentation is opt-in. No media URLs,
 // track titles, account identity or browsing history are recorded.
 if (new URLSearchParams(window.location.search).get("aurralPerf") === "1") {
-  const observer = new PerformanceObserver((list) => {
-    for (const entry of list.getEntries()) {
-      if (entry.entryType !== "longtask") continue;
-      console.info("[Aurral perf] UI long task", { durationMs: Math.round(entry.duration) });
-    }
-  });
-  if (PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+  if (typeof PerformanceObserver !== "undefined"
+    && PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.entryType !== "longtask") continue;
+        console.info("[Aurral perf] UI long task", { durationMs: Math.round(entry.duration) });
+      }
+    });
     observer.observe({ type: "longtask", buffered: true });
   }
   window.addEventListener("load", () => {

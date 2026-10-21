@@ -147,6 +147,8 @@ function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCanc
     let forcedKillTimer = null;
     let lastTransferProgressAt = Date.now();
     let progressPercent = -1;
+    let progressBytes = -1;
+    const progressBuffers = { stdout: "", stderr: "" };
     const progressWatch = idleTimeoutMs > 0 ? setInterval(() => {
       if (terminationError || Date.now() - lastTransferProgressAt < idleTimeoutMs) return;
       const error = new Error("yt-dlp transfer stalled: no progress for five minutes; review this job");
@@ -190,13 +192,20 @@ function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCanc
       clearTimers();
       reject(error);
     }
-    const readProgress = (output) => {
+    const readProgress = (output, stream) => {
       if (idleTimeoutMs <= 0) return;
-      const matches = [...output.matchAll(/\[download\]\s+(\d+(?:\.\d+)?)%/g)];
-      for (const match of matches) {
-        const percent = Number(match[1]);
-        if (percent > progressPercent) {
-          progressPercent = percent;
+      const lines = (progressBuffers[stream] + output).split(/[\\r\\n]+/);
+      progressBuffers[stream] = lines.pop()?.slice(-256) || "";
+      for (const line of lines) {
+        const bytes = /__AURRAL_BYTES__:(\\d+)/.exec(line);
+        if (bytes && Number(bytes[1]) > progressBytes) {
+          progressBytes = Number(bytes[1]);
+          lastTransferProgressAt = Date.now();
+          continue;
+        }
+        const percentage = /\\[download\\]\\s+(\\d+(?:\\.\\d+)?)%/.exec(line);
+        if (percentage && Number(percentage[1]) > progressPercent) {
+          progressPercent = Number(percentage[1]);
           lastTransferProgressAt = Date.now();
         }
       }
@@ -205,12 +214,12 @@ function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCanc
       const output = chunk.toString();
       // Searches use stdout for JSON; downloads only need a bounded tail.
       stdout = idleTimeoutMs > 0 ? (stdout + output).slice(-8192) : stdout + output;
-      readProgress(output);
+      readProgress(output, "stdout");
     });
     child.stderr.on("data", (chunk) => {
       const output = chunk.toString();
       stderr = (stderr + output).slice(-8192);
-      readProgress(output);
+      readProgress(output, "stderr");
     });
     child.on("error", (error) => {
       settleReject(error);
@@ -359,6 +368,7 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, videoId, shoul
     "--no-playlist",
     "--no-warnings",
     "--newline",
+    "--progress-template", "download:__AURRAL_BYTES__:%(progress.downloaded_bytes)s",
     ...(preserveSourceAudio ? ["-f", "bestaudio/best"] : ["-x", "--embed-metadata"]),
     "--parse-metadata",
     "title:^(?P<artist>.+?)\\s+[-–—]\\s+(?P<title>.+)$",

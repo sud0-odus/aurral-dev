@@ -24,6 +24,20 @@ db.exec(`
 // Upgrade existing reservations without deleting or resetting in-flight attempts.
 if (!db.prepare("PRAGMA table_info(download_provider_reservations)").all().some((row) => row.name === "stage")) {
   db.exec("ALTER TABLE download_provider_reservations ADD COLUMN stage TEXT NOT NULL DEFAULT 'search'");
+  // Adopt the actual current phase of PR41 reservations. Assigning every
+  // migrated lease to 'search' would strand active poll/finalize attempts.
+  db.exec(`UPDATE download_provider_reservations SET stage = COALESCE((
+    SELECT CASE
+      WHEN json_extract(h.payload, '$.phase') IN ('download','poll','transfer','await','monitor') THEN 'transfer'
+      WHEN json_extract(h.payload, '$.phase') IN ('finalize','validate','import','complete') THEN 'finalize'
+      ELSE 'search'
+    END FROM _honker_live h
+    WHERE h.queue = 'slskd-pipeline'
+      AND json_valid(h.payload)
+      AND json_extract(h.payload, '$.jobId') = download_provider_reservations.job_id
+      AND json_extract(h.payload, '$.downloadAttemptId') = download_provider_reservations.attempt_id
+    ORDER BY h.id DESC LIMIT 1
+  ), 'search')`);
 }
 const getReservation = db.prepare("SELECT * FROM download_provider_reservations WHERE job_id = ?");
 const hasOldAttemptMessage = db.prepare(`SELECT 1 FROM _honker_live
