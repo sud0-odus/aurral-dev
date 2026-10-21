@@ -87,9 +87,9 @@ const TRANSFER_RESET = Object.freeze({
   tailSince: null,
 });
 const ALBUM_TRANSFER_RESET = Object.freeze({ ...TRANSFER_RESET, albumTransfers: null });
-const STALLED_TRANSFER_MS = 30 * 60 * 1000;
-const QUEUED_TRANSFER_MS = 10 * 60 * 1000;
-const TAIL_ALBUM_TRANSFER_MS = 20 * 60 * 1000;
+const STALLED_TRANSFER_MS = 5 * 60 * 1000;
+const QUEUED_TRANSFER_MS = 5 * 60 * 1000;
+const TAIL_ALBUM_TRANSFER_MS = 5 * 60 * 1000;
 const searchMonitors = createCache(10 * 60, 100);
 const MIN_SEARCH_CANDIDATES = 3;
 const MAX_DOWNLOAD_CANDIDATES = 7;
