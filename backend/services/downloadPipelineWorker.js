@@ -17,6 +17,7 @@ import { withDownloadPayloadMutation } from "./downloadJobs/mutationGuards.js";
 import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservationsCooperatively, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
 import { holdsRemoteTransferAcrossHandoff } from "./downloadJobs/pipelineCapacityStages.js";
 import { recordDownloadEvent } from "./downloadJobs/downloadEventHistory.js";
+import { isSupersededPipelinePayload } from "./downloadJobs/pipelineSequenceGuard.js";
 
 async function processLockedPipelineJob(payload, dependencies = {}) {
   const processPayload = dependencies.processPipelinePayload || processPipelinePayload;
@@ -57,7 +58,10 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
 }
 
 export function processPipelineJob(payload, dependencies = {}) {
+  if (isSupersededPipelinePayload(payload)) return;
   return withDownloadPayloadMutation(payload, async (current) => {
+    // Re-check after waiting for per-job mutation exclusion.
+    if (isSupersededPipelinePayload(current)) return;
     if (current?.traceEnqueuedAtMs) {
       recordDownloadEvent({ jobId: current.jobId, attemptId: current.downloadAttemptId,
         category: "pipeline", event: "stage_claimed", provider: current.providerId || current.source,

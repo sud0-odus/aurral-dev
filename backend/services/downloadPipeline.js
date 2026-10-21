@@ -22,6 +22,7 @@ import { isPipelinePayloadActive } from "./downloadJobs/downloadCancellation.js"
 import { deferForInactiveOwner } from "./downloadJobs/playlistOwnerStatus.js";
 import { discardReviewFile } from "./downloadJobs/reviewFiles.js";
 import { providerSchedulerEnabled, releasePipelineProvider } from "./downloadJobs/providerSchedulerRuntime.js";
+import { nextPipelinePayload, rememberEnqueuedPipelinePayload } from "./downloadJobs/pipelineSequenceGuard.js";
 
 // Runs one step of a download job: it picks the next enabled source in
 // priority order and hands the step to that source's adapter. Every source
@@ -316,12 +317,12 @@ async function processSourcePayload(payload) {
 export async function continuePipeline(payload) {
   if (!payload) return;
   if (!isPipelinePayloadActive(payload)) return;
-  const tracedPayload = { ...payload, traceEnqueuedAtMs: Date.now() };
+  const next = nextPipelinePayload(payload);
   if (payload.delaySeconds) {
-    enqueuePipelineJob(tracedPayload, {
-      delaySeconds: Number(payload.delaySeconds),
-    });
-    return;
+    enqueuePipelineJob(next, { delaySeconds: Number(payload.delaySeconds) });
+  } else {
+    enqueuePipelineJob(next, {});
   }
-  enqueuePipelineJob(tracedPayload, {});
+  // A newer durable step supersedes a reclaimed old-step claim after crashes.
+  rememberEnqueuedPipelinePayload(next);
 }
