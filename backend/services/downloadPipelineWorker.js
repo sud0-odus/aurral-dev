@@ -16,7 +16,7 @@ import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { withDownloadPayloadMutation } from "./downloadJobs/mutationGuards.js";
 import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservationsCooperatively, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
 import { holdsRemoteTransferAcrossHandoff } from "./downloadJobs/pipelineCapacityStages.js";
-import { recordDownloadEvent } from "./downloadJobs/downloadEventHistory.js";
+import { startPipelineDiagnostics, stopPipelineDiagnostics, tracePipelineClaim, tracePipelineFinish, tracePipelineDeferred } from "./downloadJobs/pipelineDiagnostics.js";
 import { isSupersededPipelinePayload } from "./downloadJobs/pipelineSequenceGuard.js";
 
 async function processLockedPipelineJob(payload, dependencies = {}) {
@@ -31,9 +31,7 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
     const started = Date.now();
     const nextPayload = await processPayload(payload);
     const elapsedMs = Date.now() - started;
-    recordDownloadEvent({ jobId: payload.jobId, attemptId: payload.downloadAttemptId,
-      category: "pipeline", event: "stage_finished", provider: payload.providerId || payload.source,
-      detail: JSON.stringify({ stage: payload.phase, elapsedMs, next: nextPayload?.phase || "terminal" }) });
+    tracePipelineFinish(payload, nextPayload, elapsedMs);
     if (nextPayload?.albumGrab === true) recordAlbumGrabPhase(nextPayload);
     if (payload?.albumGrab === true
       && !(nextPayload?.albumGrab === true && isPipelinePayloadActive(nextPayload))) {
@@ -62,14 +60,11 @@ export function processPipelineJob(payload, dependencies = {}) {
   return withDownloadPayloadMutation(payload, async (current) => {
     // Re-check after waiting for per-job mutation exclusion.
     if (isSupersededPipelinePayload(current)) return;
-    if (current?.traceEnqueuedAtMs) {
-      recordDownloadEvent({ jobId: current.jobId, attemptId: current.downloadAttemptId,
-        category: "pipeline", event: "stage_claimed", provider: current.providerId || current.source,
-        detail: JSON.stringify({ stage: current.phase, waitMs: Math.max(0, Date.now() - current.traceEnqueuedAtMs) }) });
-    }
+    tracePipelineClaim(current);
     if (providerSchedulerEnabled() && !current?.manualSelection) {
       const reserved = reservePipelineProvider(current);
       if (!reserved) {
+        tracePipelineDeferred(current);
         await (dependencies.continuePipeline || continuePipeline)({ ...current, delaySeconds: 2 });
         return;
       }
@@ -122,9 +117,11 @@ const pipelineConsumers = Array.from({ length: 16 }, (_, index) => createHonkerW
 }));
 
 export function startDownloadPipelineWorker() {
+  startPipelineDiagnostics();
   for (const consumer of pipelineConsumers) consumer.start();
 }
 export async function stopDownloadPipelineWorker() {
+  stopPipelineDiagnostics();
   await Promise.all(pipelineConsumers.map((consumer) => consumer.stop()));
 }
 export function isDownloadPipelineWorkerRunning() {
