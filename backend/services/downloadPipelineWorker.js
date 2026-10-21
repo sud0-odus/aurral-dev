@@ -15,6 +15,8 @@ import { recordAlbumGrabQueued, recordAlbumGrabPhase } from "./albumGrabActivity
 import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { withDownloadPayloadMutation } from "./downloadJobs/mutationGuards.js";
 import { providerSchedulerEnabled, reservePipelineProvider, releasePipelineProvider, reconcilePipelineReservationsCooperatively, providerSchedulerMaxWorkers } from "./downloadJobs/providerSchedulerRuntime.js";
+import { holdsRemoteTransferAcrossHandoff } from "./downloadJobs/pipelineCapacityStages.js";
+import { recordDownloadEvent } from "./downloadJobs/downloadEventHistory.js";
 
 async function processLockedPipelineJob(payload, dependencies = {}) {
   const processPayload = dependencies.processPipelinePayload || processPipelinePayload;
@@ -25,8 +27,17 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
       recordAlbumGrabQueued(payload, downloadTracker.getAll());
       recordAlbumGrabPhase(payload);
     }
+    const started = Date.now();
     const nextPayload = await processPayload(payload);
-    if (providerSchedulerEnabled() && nextPayload == null) releasePipelineProvider(payload);
+    const elapsedMs = Date.now() - started;
+    recordDownloadEvent({ jobId: payload.jobId, attemptId: payload.downloadAttemptId,
+      category: "pipeline", event: "stage_finished", provider: payload.providerId || payload.source,
+      detail: JSON.stringify({ stage: payload.phase, elapsedMs, next: nextPayload?.phase || "terminal" }) });
+    if (providerSchedulerEnabled() && !holdsRemoteTransferAcrossHandoff(payload, nextPayload)) {
+      // Durable next-phase messages reacquire only their own stage capacity.
+      // slskd/Usenet remote transfers retain capacity across polling messages.
+      releasePipelineProvider(payload);
+    }
     if (nextPayload?.albumGrab === true) recordAlbumGrabPhase(nextPayload);
     if (payload?.albumGrab === true
       && !(nextPayload?.albumGrab === true && isPipelinePayloadActive(nextPayload))) {
@@ -47,6 +58,11 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
 
 export function processPipelineJob(payload, dependencies = {}) {
   return withDownloadPayloadMutation(payload, async (current) => {
+    if (current?.traceEnqueuedAtMs) {
+      recordDownloadEvent({ jobId: current.jobId, attemptId: current.downloadAttemptId,
+        category: "pipeline", event: "stage_claimed", provider: current.providerId || current.source,
+        detail: JSON.stringify({ stage: current.phase, waitMs: Math.max(0, Date.now() - current.traceEnqueuedAtMs) }) });
+    }
     if (providerSchedulerEnabled() && !current?.manualSelection) {
       const reserved = reservePipelineProvider(current);
       if (!reserved) {

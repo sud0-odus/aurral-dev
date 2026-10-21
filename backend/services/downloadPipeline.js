@@ -316,11 +316,12 @@ async function processSourcePayload(payload) {
 export async function continuePipeline(payload) {
   if (!payload) return;
   if (!isPipelinePayloadActive(payload)) return;
+  const tracedPayload = { ...payload, traceEnqueuedAtMs: Date.now() };
   if (payload.delaySeconds) {
-    enqueuePipelineJob(payload, {
+    enqueuePipelineJob(tracedPayload, {
       delaySeconds: Number(payload.delaySeconds),
     });
     return;
   }
-  enqueuePipelineJob(payload, {});
+  enqueuePipelineJob(tracedPayload, {});
 }
