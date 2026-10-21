@@ -149,7 +149,7 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
     let stderrProgressBuffer = "";
     const checkProgress = (data) => {
       stderrProgressBuffer = (stderrProgressBuffer + data).slice(-2048);
-      const matches = [...stderrProgressBuffer.matchAll(/\\[download\\]\\s+(\\d+(?:\\.\\d+)?)%/g)];
+      const matches = [...stderrProgressBuffer.matchAll(/\[download\]\s+(\d+(?:\.\d+)?)%/g)];
       if (matches.length) {
         const marker = matches.at(-1)[1];
         if (marker !== lastProgressMarker) {
@@ -206,7 +206,9 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       reject(error);
     }
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const data = chunk.toString();
+      if (progressWatchdog) checkProgress(data);
+      stdout = (stdout + data).slice(-1048576);
     });
     child.stderr.on("data", (chunk) => {
       const data = chunk.toString();
