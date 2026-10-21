@@ -40,11 +40,16 @@ if (!db.prepare("PRAGMA table_info(download_provider_reservations)").all().some(
   ), 'search')`);
 }
 const getReservation = db.prepare("SELECT * FROM download_provider_reservations WHERE job_id = ?");
-const hasOldAttemptMessage = db.prepare(`SELECT 1 FROM _honker_live
-  WHERE queue = 'slskd-pipeline' AND json_valid(payload)
-    AND json_extract(payload,'$.jobId') = ?
-    AND json_extract(payload,'$.downloadAttemptId') = ?
-  LIMIT 1`);
+// Honker creates _honker_live lazily. Never prepare queries against it at
+// module import: tests and first-run startup may not have initialized Honker.
+function hasOldAttemptMessage(jobId, attemptId) {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = '_honker_live'").get()) return false;
+  return Boolean(db.prepare(`SELECT 1 FROM _honker_live
+    WHERE queue = 'slskd-pipeline' AND json_valid(payload)
+      AND json_extract(payload, '$.jobId') = ?
+      AND json_extract(payload, '$.downloadAttemptId') = ?
+    LIMIT 1`).get(jobId, attemptId));
+}
 const hasExternalProviderWork = db.prepare("SELECT 1 FROM weekly_flow_download_provider_work WHERE job_id = ? LIMIT 1");
 const getActive = db.prepare("SELECT provider_id, stage, COUNT(*) AS count FROM download_provider_reservations WHERE provider_id IS NOT NULL GROUP BY provider_id, stage");
 const insertReservation = db.prepare(`INSERT INTO download_provider_reservations
@@ -126,7 +131,7 @@ export function reservePipelineProvider(payload) {
     if (old && old.attempt_id !== payload.downloadAttemptId) {
       // An old attempt must not permanently block the replacement. Do not
       // reclaim while its queue message or remote provider work still exists.
-      if (hasOldAttemptMessage.get(payload.jobId, old.attempt_id)
+      if (hasOldAttemptMessage(payload.jobId, old.attempt_id)
         || hasExternalProviderWork.get(payload.jobId)) return null;
       deleteByJob.run(payload.jobId);
       old = null;
