@@ -5,6 +5,7 @@ import path from "path";
 import { dbOps } from "../db/helpers/index.js";
 import { resolveYtdlpStagingRoot } from "./downloadFolderConfig.js";
 import { BackgroundEncodeSlots } from "./downloadJobs/backgroundEncodeSlots.js";
+import { createYtdlpProgressObserver } from "./downloadJobs/ytdlpProgress.js";
 
 const DEFAULT_BINARY = "yt-dlp";
 const SEARCH_LIMIT = 5;
@@ -146,9 +147,6 @@ function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCanc
     let terminationError = null;
     let forcedKillTimer = null;
     let lastTransferProgressAt = Date.now();
-    let progressPercent = -1;
-    let progressBytes = -1;
-    const progressBuffers = { stdout: "", stderr: "" };
     const progressWatch = idleTimeoutMs > 0 ? setInterval(() => {
       if (terminationError || Date.now() - lastTransferProgressAt < idleTimeoutMs) return;
       const error = new Error("yt-dlp transfer stalled: no progress for five minutes; review this job");
@@ -192,24 +190,10 @@ function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCanc
       clearTimers();
       reject(error);
     }
-    const readProgress = (output, stream) => {
-      if (idleTimeoutMs <= 0) return;
-      const lines = (progressBuffers[stream] + output).split(/[\r\n]+/);
-      progressBuffers[stream] = lines.pop()?.slice(-256) || "";
-      for (const line of lines) {
-        const bytes = /__AURRAL_BYTES__:(\d+)/.exec(line);
-        if (bytes && Number(bytes[1]) > progressBytes) {
-          progressBytes = Number(bytes[1]);
-          lastTransferProgressAt = Date.now();
-          continue;
-        }
-        const percentage = /(?:\[download\]\s+|__AURRAL_BYTES__:[^:]*:)(\d+(?:\.\d+)?)%/.exec(line);
-        if (percentage && Number(percentage[1]) > progressPercent) {
-          progressPercent = Number(percentage[1]);
-          lastTransferProgressAt = Date.now();
-        }
-      }
-    };
+    const progressObserver = idleTimeoutMs > 0
+      ? createYtdlpProgressObserver(() => { lastTransferProgressAt = Date.now(); })
+      : null;
+    const readProgress = (output, stream) => progressObserver?.(output, stream);
     child.stdout.on("data", (chunk) => {
       const output = chunk.toString();
       // Searches use stdout for JSON; downloads only need a bounded tail.
