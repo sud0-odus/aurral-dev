@@ -286,7 +286,12 @@ async function handleYtdlpFinalize(payload, helpers) {
   const finalName = buildTrackFileName(job, ext || ".m4a");
   const finalPath = path.join(finalDir, finalName);
   const committed = await withPipelineCommitLock(payload, async () => {
-    await writeAudioMetadata(filePath, resolvedTrack);
+    // Matroska/WebM tags are read-only in node-taglib-sharp. Preserve the
+    // original audio instead of failing import or transcoding only for tags.
+    // Track identity is retained in Aurral's library database.
+    if (![".webm", ".mka", ".mkv"].includes(ext)) {
+      await writeAudioMetadata(filePath, resolvedTrack);
+    }
     import("./aurralHistoryService.js")
       .then(({ recordTrackJobMoving }) => recordTrackJobMoving(job))
       .catch((err) => {
