@@ -13,7 +13,11 @@ const AUDIO_FORMAT = "m4a";
 const activeDownloads = new Map();
 // Opt-in end-to-end yt-dlp limiter. yt-dlp owns FFmpeg postprocessing,
 // so this caps *acquisition + conversion*, not conversion alone.
-const pipelineLimit = Number(process.env.AURRAL_YTDLP_PIPELINE_LIMIT || 0);
+// Honor the provider setting while stage-aware scheduling is active.
+const configured = Number(dbOps.getSettings()?.integrations?.ytdlp?.maxActive);
+const schedulerLimit = Number.isFinite(configured) && configured >= 1 ? Math.min(8, Math.floor(configured)) : 3;
+const pipelineLimit = process.env.AURRAL_PROVIDER_SCHEDULER === "1"
+  ? schedulerLimit : Number(process.env.AURRAL_YTDLP_PIPELINE_LIMIT || 0);
 const pipelineSlots = Number.isSafeInteger(pipelineLimit) && pipelineLimit > 0
   ? new BackgroundEncodeSlots(pipelineLimit)
   : null;
@@ -117,7 +121,7 @@ function isConfiguredFor(config = null) {
   return isEnabledFor(config) && resolveBinaryExists(getBinaryPath());
 }
 
-function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
+function runYtdlp(args, { timeoutMs = 120000, idleTimeoutMs = 0, cwd, shouldCancel } = {}) {
   return new Promise((resolve, reject) => {
     const isolatedProcessGroup = process.platform !== "win32";
     const child = spawn(getBinaryPath(), buildYtdlpInvocationArgs(args), {
@@ -140,6 +144,17 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
     let settled = false;
     let terminationError = null;
     let forcedKillTimer = null;
+    let lastTransferProgressAt = Date.now();
+    let progressPercent = -1;
+    const progressWatch = idleTimeoutMs > 0 ? setInterval(() => {
+      if (terminationError || Date.now() - lastTransferProgressAt < idleTimeoutMs) return;
+      const error = new Error("yt-dlp transfer stalled: no progress for five minutes; review this job");
+      error.code = "TRANSFER_STALLED";
+      terminationError = error;
+      signalProcess("SIGTERM");
+      forcedKillTimer = setTimeout(() => signalProcess("SIGKILL"), 1000);
+    }, 1000) : null;
+    progressWatch?.unref?.();
     const timer = setTimeout(() => {
       const error = new Error(`yt-dlp timed out after ${timeoutMs}ms`);
       error.code = "DOWNLOAD_TIMEOUT";
@@ -166,6 +181,7 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       clearTimeout(timer);
       if (forcedKillTimer) clearTimeout(forcedKillTimer);
       if (cancellationTimer) clearInterval(cancellationTimer);
+      if (progressWatch) clearInterval(progressWatch);
     }
     function settleReject(error) {
       if (settled) return;
@@ -177,7 +193,18 @@ function runYtdlp(args, { timeoutMs = 120000, cwd, shouldCancel } = {}) {
       stdout += chunk.toString();
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const output = chunk.toString();
+      stderr = (stderr + output).slice(-8192);
+      if (idleTimeoutMs > 0) {
+        const matches = [...output.matchAll(/\[download\]\s+(\d+(?:\.\d+)?)%/g)];
+        for (const match of matches) {
+          const percent = Number(match[1]);
+          if (percent > progressPercent) {
+            progressPercent = percent;
+            lastTransferProgressAt = Date.now();
+          }
+        }
+      }
     });
     child.on("error", (error) => {
       settleReject(error);
@@ -222,7 +249,7 @@ async function testConnectionFor(config = null, { force: _force = false } = {}) 
   }
 }
 
-async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
+async function searchFor(_config = null, query, { limit = SEARCH_LIMIT, shouldCancel, timeoutMs = 60000 } = {}) {
   const trimmed = String(query || "").trim();
   if (!trimmed) return [];
   const capped = Math.min(Math.max(Number(limit) || SEARCH_LIMIT, 1), 10);
@@ -234,7 +261,7 @@ async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
       "--no-warnings",
       `ytsearch${capped}:${trimmed}`,
     ],
-    { timeoutMs: 60000 },
+    { timeoutMs, shouldCancel },
   );
   const results = [];
   for (const line of String(stdout || "").split("\n")) {
@@ -263,13 +290,13 @@ async function searchFor(_config = null, query, { limit = SEARCH_LIMIT } = {}) {
   return results;
 }
 
-async function inspectVideoFor(_config = null, videoId) {
+async function inspectVideoFor(_config = null, videoId, { shouldCancel, timeoutMs = 60000 } = {}) {
   const id = String(videoId || "").trim();
   if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
   const url = `https://www.youtube.com/watch?v=${id}`;
   const { stdout } = await runYtdlp(
     ["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", "--", url],
-    { timeoutMs: 60000 },
+    { timeoutMs, shouldCancel },
   );
   const entry = JSON.parse(stdout);
   if (String(entry.id || "") !== id) return null;
@@ -315,6 +342,7 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel }
   const args = [
     "--no-playlist",
     "--no-warnings",
+    "--newline",
     ...(preserveSourceAudio ? ["-f", "bestaudio/best"] : ["-x", "--embed-metadata"]),
     "--parse-metadata",
     "title:^(?P<artist>.+?)\\s+[-–—]\\s+(?P<title>.+)$",
@@ -327,11 +355,11 @@ async function downloadAudioFor(config = null, videoUrl, { jobId, shouldCancel }
   try {
     await withPipelineSlot(async () => {
       try {
-        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
+        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, idleTimeoutMs: 300000, cwd: stagingDir, shouldCancel });
       } catch (error) {
         // Keep the slot through the retry so retried downloads cannot exceed the cap.
         if (!/HTTP Error 403/u.test(error?.message || "")) throw error;
-        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, cwd: stagingDir, shouldCancel });
+        await runYtdlp(args, { timeoutMs: DOWNLOAD_TIMEOUT_MS, idleTimeoutMs: 300000, cwd: stagingDir, shouldCancel });
       }
     }, shouldCancel);
   } catch (error) {
@@ -384,8 +412,8 @@ export class YtdlpClient {
   search(query, options) {
     return searchFor(this._config, query, options);
   }
-  inspectVideo(videoId) {
-    return inspectVideoFor(this._config, videoId);
+  inspectVideo(videoId, options) {
+    return inspectVideoFor(this._config, videoId, options);
   }
 
   downloadAudio(videoUrl, options) {
