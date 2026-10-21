@@ -64,8 +64,13 @@ export function getProviderSchedulerPolicies() {
 
 export function getProviderSchedulerCapacity(stage = "transfer") {
   const active = new Map(getActive.all(stage).map((entry) => [entry.provider_id, entry.count]));
+  // Finalization has its own bounded capacity, independent of transfer lanes.
+  const finalizeRaw = Number(process.env.AURRAL_FINALIZE_CONCURRENCY ?? 2);
+  const finalizeLimit = Number.isFinite(finalizeRaw)
+    ? Math.max(1, Math.min(8, Math.floor(finalizeRaw))) : 2;
   return getProviderSchedulerPolicies().map((policy) => ({
     ...policy,
+    maxActive: stage === "finalize" ? Math.min(policy.maxActive, finalizeLimit) : policy.maxActive,
     active: active.get(policy.id) || 0,
   }));
 }
@@ -98,17 +103,29 @@ function candidateJob(payload) {
 export function reservePipelineProvider(payload) {
   if (!providerSchedulerEnabled() || !payload?.jobId || !payload?.downloadAttemptId) return payload;
   return db.transaction(() => {
-    const old = getReservation.get(payload.jobId);
-    if (old && old.attempt_id !== payload.downloadAttemptId) return null;
+    let old = getReservation.get(payload.jobId);
+    if (old && old.attempt_id !== payload.downloadAttemptId) {
+      const priorClaim = db.prepare(`
+        SELECT state, claim_expires_at FROM _honker_live
+        WHERE queue = 'slskd-pipeline' AND json_valid(payload)
+          AND json_extract(payload, '$.jobId') = ?
+          AND json_extract(payload, '$.downloadAttemptId') = ? LIMIT 1
+      `).get(payload.jobId, old.attempt_id);
+      const externalWork = db.prepare(`
+        SELECT 1 FROM weekly_flow_download_provider_work WHERE job_id = ? LIMIT 1
+      `).get(payload.jobId);
+      if (externalWork || (priorClaim?.state === "processing"
+        && Number(priorClaim.claim_expires_at) > Date.now() / 1000)) return null;
+      deleteReservation.run(payload.jobId, old.attempt_id);
+      old = null;
+    }
     const stage = pipelineCapacityStage(payload.phase);
     const policies = getProviderSchedulerCapacity(stage);
     const active = policies.map((p) => ({
       ...p, active: Math.max(0, p.active - (old?.provider_id === p.id && old?.stage === stage ? 1 : 0)),
     }));
     const request = candidateJob(payload);
-    if (old?.provider_id && payload.providerId === old.provider_id
-      && (old.stage === stage || stage === "finalize")) {
-      if (old.stage !== stage) updateReservation.run(old.provider_id, stage, Date.now(), payload.jobId, payload.downloadAttemptId);
+    if (old?.provider_id && payload.providerId === old.provider_id && old.stage === stage) {
       return payload;
     }
     const desired = String(payload.providerId || "").trim();
@@ -124,7 +141,7 @@ export function reservePipelineProvider(payload) {
     if (!assignment) {
       // Release the old provider slot while waiting for fallback capacity,
       // but preserve the attempt's exclusivity across the delayed Honker step.
-      if (old) updateReservation.run(null, "waiting", Date.now(), payload.jobId, payload.downloadAttemptId);
+      if (old) updateReservation.run(old.provider_id, "waiting", Date.now(), payload.jobId, payload.downloadAttemptId);
       return null;
     }
     const now = Date.now();
