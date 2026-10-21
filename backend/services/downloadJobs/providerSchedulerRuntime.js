@@ -38,6 +38,7 @@ const insertReservation = db.prepare(`INSERT INTO download_provider_reservations
   VALUES (?, ?, ?, ?, ?, ?)`);
 const updateReservation = db.prepare("UPDATE download_provider_reservations SET provider_id = ?, stage = ?, updated_at = ? WHERE job_id = ? AND attempt_id = ?");
 const deleteReservation = db.prepare("DELETE FROM download_provider_reservations WHERE job_id = ? AND attempt_id = ?");
+const releaseStageReservation = db.prepare("DELETE FROM download_provider_reservations WHERE job_id = ? AND attempt_id = ? AND stage = ?");
 const deleteByJob = db.prepare("DELETE FROM download_provider_reservations WHERE job_id = ?");
 
 function limit(value, fallback) {
@@ -167,7 +168,9 @@ export function reservePipelineProvider(payload) {
 
 export function releasePipelineProvider(payload) {
   if (!providerSchedulerEnabled() || !payload?.jobId || !payload?.downloadAttemptId) return 0;
-  return deleteReservation.run(payload.jobId, payload.downloadAttemptId).changes;
+  // A continuation may have claimed the next stage already. Never delete its
+  // reservation when releasing the previous stage after durable enqueue.
+  return releaseStageReservation.run(payload.jobId, payload.downloadAttemptId, capacityStageForPayload(payload)).changes;
 }
 
 export function revokePipelineProviderJob(jobId) {

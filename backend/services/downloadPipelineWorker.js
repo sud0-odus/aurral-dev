@@ -33,17 +33,17 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
     recordDownloadEvent({ jobId: payload.jobId, attemptId: payload.downloadAttemptId,
       category: "pipeline", event: "stage_finished", provider: payload.providerId || payload.source,
       detail: JSON.stringify({ stage: payload.phase, elapsedMs, next: nextPayload?.phase || "terminal" }) });
-    if (providerSchedulerEnabled() && !holdsRemoteTransferAcrossHandoff(payload, nextPayload)) {
-      // Durable next-phase messages reacquire only their own stage capacity.
-      // slskd/Usenet remote transfers retain capacity across polling messages.
-      releasePipelineProvider(payload);
-    }
     if (nextPayload?.albumGrab === true) recordAlbumGrabPhase(nextPayload);
     if (payload?.albumGrab === true
       && !(nextPayload?.albumGrab === true && isPipelinePayloadActive(nextPayload))) {
       releaseAlbumGrabJobs(payload, ALBUM_GRAB_ENDED_REASON);
     }
+    // The next stage must be persisted before releasing this stage's lease.
+    // A stage-qualified release protects a concurrently claimed continuation.
     await continuePayload(nextPayload);
+    if (providerSchedulerEnabled() && !holdsRemoteTransferAcrossHandoff(payload, nextPayload)) {
+      releasePipelineProvider(payload);
+    }
   } catch (error) {
     if (payload?.manualSelection !== true) throw error;
     const message = safeLogDiagnostic(error) || "Manual download failed";
