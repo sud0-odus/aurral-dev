@@ -1,0 +1,399 @@
+diff --git a/.tests/download/album-source-grabs.test.js b/.tests/download/album-source-grabs.test.js
+index e7844ec8..ceeb0c1a 100644
+--- a/.tests/download/album-source-grabs.test.js
++++ b/.tests/download/album-source-grabs.test.js
+@@ -1076,6 +1076,10 @@ test("a Soulseek album queued before candidates said a listing proved their rele
+ });
+ 
+ test("a Usenet album needs every track of the pinned release, imports only the wanted ones, and tries the next release", async (t) => {
++  // This test drives the adapter directly. Drain background dispatch from
++  // preceding worker tests before replacing the download-client methods.
++  await downloadWorker.stopAndDrain();
++  await stopDownloadPipelineWorker();
+   const group = "usenet-next-release";
+   const titles = Array.from({ length: 10 }, (_, index) => `Song ${index + 1}`);
+   const wanted = ["Song 4", "Song 9"];
+diff --git a/.tests/download/approved-import-path.test.js b/.tests/download/approved-import-path.test.js
+index dbf326fc..6783e42a 100644
+--- a/.tests/download/approved-import-path.test.js
++++ b/.tests/download/approved-import-path.test.js
+@@ -321,6 +321,7 @@ test("approving a library track does not wait for another library track's downlo
+     playlistId: "library",
+     playlistGeneration: downloadTracker.getJob(searchingJobId).playlistGeneration,
+   }, {
++    startWorkerIfPending: async () => {},
+     async processPipelinePayload() {
+       stepStarted.resolve();
+       await releaseStep.promise;
+diff --git a/.tests/download/download-mutation-lock.test.js b/.tests/download/download-mutation-lock.test.js
+index e5ebd033..aa0693d3 100644
+--- a/.tests/download/download-mutation-lock.test.js
++++ b/.tests/download/download-mutation-lock.test.js
+@@ -2,11 +2,16 @@ import test from "node:test";
+ import assert from "node:assert/strict";
+ import { setupIsolatedBackend, cleanupIsolatedState } from "../helpers/backendTestHarness.js";
+ 
+-const [state, { dbOps }, { flowPlaylistConfig }, { downloadTracker }, { processPipelineJob }, guards, cancellation] = await setupIsolatedBackend(
++const [state, { dbOps }, { flowPlaylistConfig }, { downloadTracker }, { processPipelineJob: runPipelineJob }, guards, cancellation] = await setupIsolatedBackend(
+   "download-mutation-lock", "backend/db/helpers/index.js", "backend/services/playlists/flowPlaylistConfig.js",
+   "backend/services/downloadJobs/downloadTracker.js", "backend/services/downloadPipelineWorker.js",
+   "backend/services/downloadJobs/mutationGuards.js", "backend/services/downloadJobs/downloadCancellation.js",
+ );
++// These tests replace provider processing; dispatch is exercised separately
++// in pipeline-progress.test.js rather than starting real provider work here.
++const processPipelineJob = (payload, dependencies) => runPipelineJob(payload, {
++  startWorkerIfPending: async () => {}, ...dependencies,
++});
+ test.after(() => cleanupIsolatedState(state));
+ const deferred = () => Promise.withResolvers();
+ 
+diff --git a/.tests/download/slskd-search-polling.test.js b/.tests/download/slskd-search-polling.test.js
+index 7cbfcb94..47cf114e 100644
+--- a/.tests/download/slskd-search-polling.test.js
++++ b/.tests/download/slskd-search-polling.test.js
+@@ -197,3 +197,25 @@ test("a search still queued in slskd at the caller's deadline reports slskd as b
+   await outcome;
+   assert.deepEqual(deleted.mock.calls.map((call) => call.arguments[0]), ["busy-search"]);
+ });
++
++test("a restored search still queued after fifteen minutes reports busy and removes its search", async (t) => {
++  const now = 24 * 60 * 60 * 1000;
++  t.mock.timers.enable({ apis: ["Date"], now });
++  const polled = t.mock.method(slskdClient, "getSearch", async () => ({ state: "Queued", responses: [] }));
++  const deleted = t.mock.method(slskdClient, "deleteSearch", async () => true);
++  const monitor = slskdClient.monitorSearch("restored-busy-search", { startedAt: now - 16 * 60 * 1000 });
++  await assert.rejects(monitor.poll(), { code: "SLSKD_SEARCH_BUSY" });
++  assert.equal(polled.mock.callCount(), 1, "check whether the search started before abandoning it");
++  assert.deepEqual(deleted.mock.calls.map((call) => call.arguments[0]), ["restored-busy-search"]);
++});
++
++test("a restored queued search that has started still receives its full result window", async (t) => {
++  const now = 24 * 60 * 60 * 1000;
++  t.mock.timers.enable({ apis: ["Date"], now });
++  t.mock.method(slskdClient, "getSearch", async () => ({ state: "InProgress", responses: [] }));
++  const monitor = slskdClient.monitorSearch("restored-running-search", { startedAt: now - 16 * 60 * 1000 });
++  const step = await monitor.poll();
++  assert.equal(step.done, false);
++  assert.equal(monitor.startedAt, now);
++  assert.ok(step.waitMs > 0);
++});
+diff --git a/.tests/download/slskd-search-steps.test.js b/.tests/download/slskd-search-steps.test.js
+index 5501edb8..75c259f5 100644
+--- a/.tests/download/slskd-search-steps.test.js
++++ b/.tests/download/slskd-search-steps.test.js
+@@ -154,6 +154,27 @@ test("tracks from one album reuse the album search", async (t) => {
+   assert.match(secondResult.next.candidates[0].raw.file, /Second\.flac$/);
+ });
+ 
++test("an over-budget queued search falls back without caching empty results or submitting more queries", async (t) => {
++  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
++  const youtube = getDownloadClient("ytdlp");
++  t.mock.method(youtube, "isConfigured", () => true);
++  const { created } = mockSearch(t, []);
++  t.mock.method(client, "getSearch", async () => ({ state: "Queued", responses: [] }));
++  const makeJob = () => downloadTracker.addJob({ artistName: "Busy Band", trackName: "Busy Song", durationMs: 200000 }, "library");
++  const jobId = makeJob();
++  const first = await processPipelinePayload({ phase: "search", source: "slskd", jobId });
++  t.mock.timers.tick(16 * 60 * 1000);
++  const fallback = await processPipelinePayload(first);
++  assert.equal(fallback.source, "ytdlp");
++  assert.equal(fallback.phase, "search");
++  assert.match(fallback.sourceErrors.at(-1).message, /busy/i);
++  assert.equal(created.mock.callCount(), 1);
++  assert.notEqual(downloadTracker.getJob(jobId).status, "failed");
++  const second = await processPipelinePayload({ phase: "search", source: "slskd", jobId: makeJob() });
++  assert.equal(second.activeSearch.id, "search-2", "a busy response must not poison the query cache");
++  assert.equal(created.mock.callCount(), 2);
++});
++
+ test("a failed Soulseek poll moves on to the next query", async (t) => {
+   let searchCount = 0;
+   const created = t.mock.method(client, "createSearch", async (query, options) => {
+diff --git a/backend/services/downloadJobs/downloadWorker.js b/backend/services/downloadJobs/downloadWorker.js
+index c9f6d1b6..e6464874 100644
+--- a/backend/services/downloadJobs/downloadWorker.js
++++ b/backend/services/downloadJobs/downloadWorker.js
+@@ -43,6 +43,7 @@ const DEFAULT_CONCURRENCY = 3;
+ const SEARCH_SLOT_RECHECK_MS = 2000;
+ const MIN_CONCURRENCY = 1;
+ const MAX_CONCURRENCY = 3;
++const MAX_IN_FLIGHT_PIPELINE_JOBS = 6;
+ const JOB_COOLDOWN_MS = 750;
+ const REUSE_REPAIR_INTERVAL_MS = 30 * 60 * 1000;
+ const WORKER_STOPPED_CODE = "WORKER_STOPPED";
+@@ -51,14 +52,19 @@ const RELEASE_WAIT_REASON = "Waiting for metadata to read the album release";
+ // The worker hands a job to the pipeline only while fewer jobs than its
+ // concurrency are searching, so a large playlist does not start every
+ // provider search at once.
+-function countSearchingPipelineJobs() {
+-  return listHonkerJobs("slskd-pipeline").filter((entry) => entry.payload?.phase === "search").length;
++function pipelineAdmissionCounts() {
++  const entries = listHonkerJobs("slskd-pipeline");
++  const jobIds = new Set(entries.map((entry) => entry.payload?.jobId).filter(Boolean));
++  const searching = new Set(entries.filter((entry) => entry.payload?.phase === "search")
++    .map((entry) => entry.payload?.jobId).filter(Boolean));
++  return { searching: searching.size, total: jobIds.size };
+ }
+ 
+ export class DownloadWorker {
+   constructor(downloadRoot = resolveDownloadRoot()) {
+     this.downloadRoot = resolveDownloadRoot(downloadRoot);
+     this.running = false;
++    this.paused = false;
+     this.activeCount = 0;
+     this.lastReuseRepairAt = 0;
+     this.reuseRepairCursor = 0;
+@@ -475,6 +481,7 @@ export class DownloadWorker {
+   }
+ 
+   async start() {
++    this.paused = false;
+     if (this.running) {
+       return;
+     }
+@@ -488,7 +495,9 @@ export class DownloadWorker {
+       if (!this.running) return;
+       const { concurrency } = this.getWorkerSettings();
+       while (this.activeCount < concurrency) {
+-        if (this.activeCount + countSearchingPipelineJobs() >= concurrency) {
++        const pipeline = pipelineAdmissionCounts();
++        if (this.activeCount + pipeline.searching >= concurrency ||
++            this.activeCount + pipeline.total >= MAX_IN_FLIGHT_PIPELINE_JOBS) {
+           this._scheduleProcessIn(SEARCH_SLOT_RECHECK_MS);
+           break;
+         }
+@@ -579,6 +588,7 @@ export class DownloadWorker {
+   }
+ 
+   stop() {
++    this.paused = true;
+     const stopped = this._requestStop();
+     if (!stopped) {
+       return;
+@@ -587,6 +597,7 @@ export class DownloadWorker {
+   }
+ 
+   async stopAndDrain() {
++    this.paused = true;
+     this._requestStop();
+     await this.waitForIdle();
+     downloadTracker.resetDownloadingToPending();
+@@ -892,7 +903,8 @@ export const downloadWorker = isDownloadOwnerProcess()
+   ? new DownloadWorker()
+   : createRemoteDownloadWorker();
+ 
+-export async function startWorkerIfPending() {
++export async function startWorkerIfPending({ respectPause = false } = {}) {
++  if (respectPause && downloadWorker.paused) return;
+   const pending = downloadTracker.getNextPending();
+   if (!pending) return;
+   if (downloadWorker.running) {
+diff --git a/backend/services/downloadPipelineWorker.js b/backend/services/downloadPipelineWorker.js
+index 98983763..7a32640a 100644
+--- a/backend/services/downloadPipelineWorker.js
++++ b/backend/services/downloadPipelineWorker.js
+@@ -37,8 +37,23 @@ async function processLockedPipelineJob(payload, dependencies = {}) {
+   }
+ }
+ 
+-export function processPipelineJob(payload, dependencies = {}) {
+-  return withDownloadPayloadMutation(payload, (current) => processLockedPipelineJob(current, dependencies));
++export async function processPipelineJob(payload, dependencies = {}) {
++  try {
++    return await withDownloadPayloadMutation(payload, (current) => processLockedPipelineJob(current, dependencies));
++  } finally {
++    // Wake dispatch after releasing the playlist lease. A waiting transfer
++    // or search may be the only work that survived an idle owner/restart.
++    // Failure to wake must not retry a step whose continuation was persisted.
++    try {
++      const startPending = dependencies.startWorkerIfPending ||
++        (await import("./downloadJobs/downloadWorker.js")).startWorkerIfPending;
++      await startPending({ respectPause: true });
++    } catch (error) {
++      logger.warn("downloads", "Could not wake pending download jobs", {
++        reason: safeLogDiagnostic(error),
++      });
++    }
++  }
+ }
+ 
+ const {
+diff --git a/backend/services/slskdClient.js b/backend/services/slskdClient.js
+index 92721860..fe5fa1f4 100644
+--- a/backend/services/slskdClient.js
++++ b/backend/services/slskdClient.js
+@@ -8,6 +8,7 @@ const NORMALIZED_SEARCH_RESULTS = Symbol("normalizedSearchResults");
+ const DEFAULT_SEARCH_TIMEOUT_MS = 60000;
+ const DEFAULT_EMPTY_SEARCH_TIMEOUT_MS = 10000;
+ const DEFAULT_SEARCH_GRACE_PERIOD_MS = 20000;
++const MAX_QUEUED_SEARCH_MS = 15 * 60 * 1000;
+ const DEFAULT_FILE_LIMIT = 1000;
+ const DEFAULT_RESPONSE_LIMIT = 150;
+ const DEFAULT_MAX_PEER_QUEUE = 150;
+@@ -238,7 +239,9 @@ function summarizeBatchFailures(failures) {
+ }
+ 
+ function searchStillQueuedError() {
+-  return new Error("slskd is busy: the search is still waiting in its queue");
++  const error = new Error("slskd is busy: the search is still waiting in its queue");
++  error.code = "SLSKD_SEARCH_BUSY";
++  return error;
+ }
+ 
+ function soulseekLoggedOutError(detail) {
+@@ -328,6 +331,9 @@ class SearchMonitor {
+     this.activeTimeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_SEARCH_TIMEOUT_MS;
+     this.gracePeriodMs = Math.max(0, Number(options.gracePeriodMs ?? DEFAULT_SEARCH_GRACE_PERIOD_MS));
+     this.hardDeadline = Number(options.deadline) || Infinity;
++    // Keep the original creation time across monitor-cache expiry and restarts.
++    // A busy source must eventually yield to another configured source.
++    this.queueStartedAt = Number(options.startedAt) || Date.now();
+     this.startWindows(Number(options.startedAt) || Date.now());
+     this.queued = options.queued !== false;
+     this.totalFiles = 0;
+@@ -398,7 +404,9 @@ class SearchMonitor {
+       const wasQueued = this.queued;
+       this.queued = isSearchQueued(data);
+       if (this.queued) {
+-        if (Date.now() >= this.hardDeadline) throw searchStillQueuedError();
++        if (Date.now() >= this.hardDeadline || Date.now() - this.queueStartedAt >= MAX_QUEUED_SEARCH_MS) {
++          throw searchStillQueuedError();
++        }
+         return { done: false, data, waitMs: Math.min(2000, Math.max(1, this.hardDeadline - Date.now())) };
+       }
+       if (wasQueued) this.startWindows(Date.now());
+diff --git a/backend/services/slskdOrchestrator.js b/backend/services/slskdOrchestrator.js
+index a6e6b677..ce5072d9 100644
+--- a/backend/services/slskdOrchestrator.js
++++ b/backend/services/slskdOrchestrator.js
+@@ -731,6 +731,10 @@ async function advanceSlskdSearch(payload, job, queries, resolvedTrack, searchOp
+           enough(probeAggregatedResults(aggregated, slskdClient.flattenSearchResults(data), seen)),
+       });
+     } catch (error) {
++      if (error?.code === "SLSKD_SEARCH_BUSY") {
++        searchMonitors.delete(activeSearch.id);
++        return { busy: error };
++      }
+       logger.warn("slskd", "slskd search poll failed; moving to the next query", {
+         jobId: payload.jobId,
+         searchId: activeSearch.id,
+@@ -844,6 +848,9 @@ async function handleSearch(payload, helpers) {
+   );
+   if (step.cancelled || !isPipelinePayloadActive(payload)) return null;
+   if (step.loggedOut) return waitForSoulseekLogin(step.payload, job, helpers, step.loggedOut.message);
++  // Busy is not an empty search result: do not cache it or submit more
++  // queries to the same congested source for this attempt.
++  if (step.busy) return helpers.failOrTryNextSource(payload, job, step.busy.message);
+   if (step.payload) return step.payload;
+   const { aggregated, searchIds, queryCount } = step;
+   const searchId = payload.searchId || searchIds[0] || null;
+diff --git a/.tests/download/pipeline-progress.test.js b/.tests/download/pipeline-progress.test.js
+new file mode 100644
+index 00000000..e7b9a449
+--- /dev/null
++++ b/.tests/download/pipeline-progress.test.js
+@@ -0,0 +1,104 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { setupIsolatedBackend, cleanupIsolatedState } from "../helpers/backendTestHarness.js";
++
++const [state, { dbOps }, { downloadTracker }, { downloadWorker }, { processPipelineJob }, guards, { getPipelineQueue, getHonkerDb }] = await setupIsolatedBackend(
++  "pipeline-progress", "backend/db/helpers/index.js", "backend/services/downloadJobs/downloadTracker.js",
++  "backend/services/downloadJobs/downloadWorker.js", "backend/services/downloadPipelineWorker.js",
++  "backend/services/downloadJobs/mutationGuards.js",
++  "backend/services/honkerDb.js",
++);
++test.after(() => cleanupIsolatedState(state));
++test.beforeEach(async () => {
++  await downloadWorker.stopAndDrain();
++  downloadTracker.clearAll();
++  const transaction = getHonkerDb().transaction();
++  transaction.execute("DELETE FROM _honker_live WHERE queue = 'slskd-pipeline'");
++  transaction.commit();
++  dbOps.updateSettings({ integrations: { ytdlp: { enabled: false } }, flows: [], sharedPlaylists: [] });
++});
++
++test("a waiting pipeline step restarts dispatch and respects the two-job admission limit", async (t) => {
++  t.mock.timers.enable({ apis: ["setTimeout"] });
++  const waiting = downloadTracker.addJob({ artistName: "Queued", trackName: "Already dispatched" }, "library");
++  downloadTracker.markSlskdDispatched(waiting);
++  const pending = Array.from({ length: 100 }, (_, i) => downloadTracker.addJob({ artistName: "Next", trackName: `Track ${i}` }, "library"));
++  downloadWorker.paused = false;
++  t.mock.method(downloadWorker, "getWorkerSettings", () => ({ concurrency: 2 }));
++  t.mock.method(downloadWorker, "scheduleReuseLinkRepair", () => {});
++  const release = Promise.withResolvers();
++  const admitted = [];
++  let maxActive = 0;
++  t.mock.method(downloadWorker, "processJob", async (job) => {
++    admitted.push(job.id);
++    maxActive = Math.max(maxActive, downloadWorker.activeCount);
++    downloadTracker.markSlskdDispatched(job.id);
++    await release.promise;
++  });
++  await processPipelineJob({ jobId: waiting, playlistId: "library", phase: "search" }, {
++    async processPipelinePayload(payload) { return { ...payload, delaySeconds: 2 }; },
++  });
++  assert.equal(admitted.length, 1, "one queued search and one admitted job fill the two-job limit");
++  release.resolve();
++  for (let step = 0; step < 500 && admitted.length < pending.length; step += 1) {
++    await new Promise(setImmediate);
++    t.mock.timers.tick(250);
++  }
++  await new Promise(setImmediate);
++  assert.equal(admitted.length, 100);
++  assert.equal(new Set(admitted).size, 100);
++  assert.equal(maxActive, 1, "the existing queued search retains its admission slot");
++  assert.ok(!admitted.includes(waiting));
++});
++
++test("a pipeline continuation does not override an explicit worker stop", async (t) => {
++  const id = downloadTracker.addJob({ artistName: "Paused", trackName: "Keep waiting" }, "library");
++  const start = t.mock.method(downloadWorker, "start", async () => {});
++  await processPipelineJob({ jobId: id, playlistId: "library" }, {
++    async processPipelinePayload() { return null; }, async continuePipeline() {},
++  });
++  assert.equal(start.mock.callCount(), 0);
++  assert.equal(downloadTracker.getJob(id).status, "pending");
++});
++
++test("six in-flight pipeline jobs apply backpressure until a slot is released", async (t) => {
++  t.mock.timers.enable({ apis: ["setTimeout"] });
++  const queue = getPipelineQueue();
++  for (let i = 0; i < 6; i++) {
++    const id = downloadTracker.addJob({ artistName: "In flight", trackName: `Transfer ${i}` }, "library");
++    downloadTracker.markSlskdDispatched(id);
++    queue.enqueue({ jobId: id, phase: "poll", playlistId: "library" });
++  }
++  downloadTracker.addJob({ artistName: "Backlog", trackName: "Next transfer" }, "library");
++  t.mock.method(downloadWorker, "getWorkerSettings", () => ({ concurrency: 2 }));
++  t.mock.method(downloadWorker, "scheduleReuseLinkRepair", () => {});
++  const process = t.mock.method(downloadWorker, "processJob", async (job) => {
++    downloadTracker.markSlskdDispatched(job.id);
++    queue.enqueue({ jobId: job.id, phase: "poll", playlistId: "library" });
++  });
++  await downloadWorker.start();
++  t.mock.timers.tick(2000);
++  await new Promise(setImmediate);
++  assert.equal(process.mock.callCount(), 0);
++  const completed = queue.claimOne("capacity-test");
++  completed.ack();
++  t.mock.timers.tick(2000);
++  await new Promise(setImmediate);
++  assert.equal(process.mock.callCount(), 1);
++});
++
++test("dispatch wakes outside the playlist lease and wake failure does not retry persisted work", async () => {
++  const id = downloadTracker.addJob({ artistName: "Lease", trackName: "Safe wake" }, "library");
++  let processed = 0;
++  let continued = 0;
++  await processPipelineJob({ jobId: id, playlistId: "library" }, {
++    async processPipelinePayload() { processed++; return null; },
++    async continuePipeline() { continued++; },
++    async startWorkerIfPending() {
++      await guards.withPlaylistMutationLock("another-owner", () => null);
++      throw new Error("disposable dispatcher failure");
++    },
++  });
++  assert.equal(processed, 1);
++  assert.equal(continued, 1);
++});
