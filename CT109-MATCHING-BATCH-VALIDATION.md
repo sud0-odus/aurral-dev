@@ -1,0 +1,13 @@
+# Validation: matching/batching patch 3
+
+- Broad regression: 1,374 passed, zero failed/skipped/cancelled across download, track-matching, Honker queue, Library and playlist suites. Two-test concurrency, two-CPU process-group guard; peak 548.2 MiB, 237.5 s. This includes the prior 100-job dispatch/admission, explicit pause and durable continuation regressions.
+- After the final metadata scan-scope refinement, all 144 playlist tests passed, zero failed/skipped/cancelled; peak 563.2 MiB, 38.8 s. Confirms targeted scans for changed downloaded files and no filesystem scan when enriching pending-only tracks.
+- Collaboration tests verify the Sweetest Pie pattern for Soulseek original filenames and YouTube featured titles. Missing collaborator evidence, unrelated performer tags (even when both names appear in a featured title), and remix conflicts do not auto-verify. Normal duration/quality/version/identity tests remain in the broad suite.
+- Batching tests merge 50 file paths into one bounded pending scan, retain every path and expedite forced scans. Scan recovery/claim tests advance delayed jobs explicitly before testing claims. Existing in-flight/pending-path and cross-process scan protections pass.
+- Enrichment tests merge 50 requests, preserve stronger flags/priority/earlier execution, retain one follow-up during processing, keep playlists separate, and serialize two independent producer processes to one pending job.
+- Installer/collector/launcher: 26 tests passed, including privacy allowlists, raw error redaction into fixed labels, WAL visibility, recoverable checkpoints, code/database preservation through rollback, corrupt payload rejection, and collector-only systemd limits.
+- Scoped ESLint of all five changed backend files and git diff --check passed. No frontend rebuild or dependency update is part of patch 3.
+- Patched application smoke: health/matcher available, existing frontend served, actual /proc profiling works, and SIGTERM saves an early final report; peak 256.9 MiB, 5.6 s. Smoke preceded the final metadata scan-scope refinement, which is covered by the complete playlist suite above. Cloud app stopped afterward.
+- The release installer payload is checked against the exact expected source hashes from patches 1/2 and original v2.11 files for the five new changes.
+
+No connection to CT109 was made from the cloud. Live throughput, reduced Review volume, and background-work reductions must be measured after deployment. The patch does not bulk approve existing reviews or guarantee resolution of unrelated download failures. Production uploads are not included in the public artifact.

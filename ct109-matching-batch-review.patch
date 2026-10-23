@@ -1,0 +1,491 @@
+diff --git a/.tests/library/library-refresh.test.js b/.tests/library/library-refresh.test.js
+index 5297c9a1..9b064afe 100644
+--- a/.tests/library/library-refresh.test.js
++++ b/.tests/library/library-refresh.test.js
+@@ -278,6 +278,7 @@ test("an oversized active watcher merge requests a full rescan", () => {
+       includeLidarr: false,
+       changedPaths: ["/data/music/in-flight.flac"],
+     });
++    db.prepare("UPDATE _honker_live SET run_at = 0 WHERE id = ?").run(jobId);
+     assert.equal(queue.claimOne("overflow-library-scan-test")?.id, jobId);
+     assert.equal(claimScheduledLibraryScanJob(jobId), true);
+     dbOps.setJSONSetting("pendingLibraryScanJob", {
+@@ -313,6 +314,7 @@ test("stale targeted scans retain in-flight and pending paths", () => {
+       includeLidarr: false,
+       changedPaths: ["/data/music/initial.flac"],
+     });
++    db.prepare("UPDATE _honker_live SET run_at = 0 WHERE id = ?").run(staleJobId);
+     assert.equal(queue.claimOne("stale-targeted-library-scan-test")?.id, staleJobId);
+     assert.equal(claimScheduledLibraryScanJob(staleJobId), true);
+     dbOps.setJSONSetting("pendingLibraryScanJob", {
+@@ -381,7 +383,7 @@ test("an early replacement claim retains in-flight, pending, and new scan paths"
+ 
+     const enqueue = queue.enqueue.bind(queue);
+     t.mock.method(queue, "enqueue", (payload, options) => {
+-      const id = enqueue(payload, options);
++      const id = enqueue(payload, { ...options, runAt: 0 });
+       const claimed = queue.claimOne("early-replacement-library-scan-test");
+       assert.equal(claimed?.id, id);
+       assert.equal(claimScheduledLibraryScanJob(id, claimed.payload), true);
+@@ -416,7 +418,7 @@ test("an early first claim uses its targeted payload without stale Lidarr mode",
+   try {
+     const enqueue = queue.enqueue.bind(queue);
+     t.mock.method(queue, "enqueue", (payload, options) => {
+-      const id = enqueue(payload, options);
++      const id = enqueue(payload, { ...options, runAt: 0 });
+       const claimed = queue.claimOne("early-first-library-scan-test");
+       assert.equal(claimed?.id, id);
+       assert.equal(claimScheduledLibraryScanJob(id, claimed.payload), true);
+diff --git a/.tests/library/library-scan-playback.test.js b/.tests/library/library-scan-playback.test.js
+index 92358a49..175f93ae 100644
+--- a/.tests/library/library-scan-playback.test.js
++++ b/.tests/library/library-scan-playback.test.js
+@@ -123,6 +123,23 @@ async function makeTrack(filePath, title = "Song", artist = "Scan Artist") {
+   assert.equal(generated.status, 0, generated.stderr);
+ }
+ 
++test("incremental scan bursts retain all paths in one bounded batch; forced scans expedite it", () => {
++  const now = Math.floor(Date.now() / 1000);
++  const files = Array.from({ length: 50 }, (_, i) => path.join(downloadRoot, `Artist/Album/${i}.mp3`));
++  const ids = files.map((file) => scans.scheduleLibraryScan({ includeLidarr: false, changedPaths: [file] }));
++  assert.equal(new Set(ids).size, 1);
++  const [pending] = honker.listHonkerJobs("library-scan");
++  assert.ok(pending.run_at >= now + 29 && pending.run_at <= now + 31);
++  assert.deepEqual(new Set(scans.beginLibraryScanJob(ids[0], pending.payload).changedPaths), new Set(files));
++  scans.onLibraryScanSuccess(null, { id: ids[0] });
++  // Clear the manually exercised job before testing a separate pending batch.
++  honker.getLibraryScanQueue().cancel(ids[0]);
++  const next = scans.scheduleLibraryScan({ includeLidarr: false, changedPaths: [files[0]] });
++  assert.equal(scans.scheduleLibraryScan({ force: true, includeLidarr: false }), next);
++  assert.ok(honker.getLibraryScanQueue().getJob(next).run_at <= Math.floor(Date.now() / 1000));
++  assert.equal(scans.beginLibraryScanJob(next, {}).changedPaths, null);
++});
++
+ async function libraryScanRunner(t) {
+   t.mock.method(axios, "get", async () => ({ data: [] }));
+   const events = honker.getHonkerDb().updateEvents();
+@@ -131,6 +148,7 @@ async function libraryScanRunner(t) {
+     await scans.stopLibraryScanWorker();
+   });
+   const finish = async (id) => {
++    setRunAt(id, 0);
+     scans.startLibraryScanWorker();
+     while (scans.getLibraryScanStatus(id)?.status !== "completed") {
+       assert.notEqual(scans.getLibraryScanStatus(id)?.status, "failed");
+@@ -540,6 +558,7 @@ test("a retained Library file deleted by a scan leaves the Library and reaches t
+   const failed = t.mock.method(lidarrClient, "isConfigured", () => {
+     throw new Error("Lidarr check failed");
+   }, { times: 1 });
++  setRunAt(jobId, 0);
+   scans.startLibraryScanWorker();
+   const job = () => scans.getLibraryScanStatus(jobId);
+   while (!(failed.mock.callCount() === 1 && job().status === "queued")) await events.next();
+@@ -600,6 +619,7 @@ test("a Library scan stopped after indexing has already queued its server notice
+   });
+ 
+   const jobId = scans.scheduleLibraryScan({ includeLidarr: false, changedPaths: [path.join(album, "Song.wav")] });
++  setRunAt(jobId, 0);
+   scans.startLibraryScanWorker();
+   await held;
+ 
+diff --git a/.tests/playlists/playlist-mbid-enrichment.test.js b/.tests/playlists/playlist-mbid-enrichment.test.js
+index b4404042..e8e6e6c5 100644
+--- a/.tests/playlists/playlist-mbid-enrichment.test.js
++++ b/.tests/playlists/playlist-mbid-enrichment.test.js
+@@ -1,5 +1,7 @@
+ import test from "node:test";
+ import assert from "node:assert/strict";
++import { fork } from "node:child_process";
++import { setTimeout as delay } from "node:timers/promises";
+ 
+ import {
+   setupIsolatedBackend,
+@@ -14,10 +16,11 @@ const [
+   { flowPlaylistConfig },
+   { downloadTracker },
+   { playlistManager },
+-  { getPlaylistMbidEnrichmentQueue },
++  { getPlaylistMbidEnrichmentQueue, getHonkerDb, listHonkerJobs, getLibraryScanQueue },
+   {
+     enrichStaticPlaylistMbids,
+     schedulePlaylistMbidEnrichmentForMissingPlaylists,
++    schedulePlaylistMbidEnrichment,
+   },
+ ] = await setupIsolatedBackend(
+   "playlist-mbid-enrichment",
+@@ -33,6 +36,9 @@ const [
+ test.beforeEach(() => {
+   downloadTracker.clearAll();
+   resetDatabase(db);
++  const tx = getHonkerDb().transaction();
++  tx.execute("DELETE FROM _honker_live WHERE queue IN ('playlist-mbid-enrichment', 'library-scan')");
++  tx.commit();
+   dbOps.updateSettings({
+     integrations: {},
+     onboardingComplete: true,
+@@ -41,6 +47,52 @@ test.beforeEach(() => {
+   });
+ });
+ 
++test("metadata bursts coalesce per playlist and retain stronger reconciliation requests", () => {
++  const ids = Array.from({ length: 50 }, (_, i) => schedulePlaylistMbidEnrichment("batched", {
++    delaySeconds: i === 49 ? 0 : 20,
++    priority: i === 49 ? 5 : 0,
++    reconcileArtistMbids: i === 49,
++  }));
++  assert.equal(new Set(ids).size, 1);
++  const [pending] = listHonkerJobs("playlist-mbid-enrichment");
++  assert.equal(pending.payload.reconcileArtistMbids, true);
++  assert.ok(pending.run_at <= Math.floor(Date.now() / 1000));
++  const [processing] = getPlaylistMbidEnrichmentQueue().claimBatch("test-worker", 1);
++  assert.equal(processing.id, ids[0]);
++  const followUp = schedulePlaylistMbidEnrichment("batched");
++  assert.notEqual(followUp, ids[0], "changes arriving during processing need one follow-up");
++  assert.equal(schedulePlaylistMbidEnrichment("batched"), followUp);
++  assert.notEqual(schedulePlaylistMbidEnrichment("another-playlist"), followUp);
++  assert.equal(listHonkerJobs("playlist-mbid-enrichment").length, 3);
++});
++
++test("independent producers cannot create duplicate pending enrichment jobs", { timeout: 15000 }, async (t) => {
++  const fixture = new URL("../fixtures/metadata-enrichment-caller.mjs", import.meta.url);
++  const children = [0, 1].map(() => fork(fixture, { stdio: ["ignore", "ignore", "inherit", "ipc"] }));
++  t.after(() => children.forEach((child) => child.kill()));
++  const message = (child, kind) => new Promise((resolve, reject) => {
++    const handler = (data) => {
++      if (data?.type === kind) { child.off("message", handler); resolve(data); }
++    };
++    child.on("message", handler);
++    child.once("error", reject);
++  });
++  await Promise.all(children.map((child) => message(child, "ready")));
++  const lock = getHonkerDb().transaction();
++  const result = children.map((child) => message(child, "result"));
++  try {
++    const calling = children.map((child) => message(child, "calling"));
++    children.forEach((child) => child.send({ playlistId: "concurrent-playlist" }));
++    await Promise.all(calling);
++    await delay(100);
++  } finally {
++    lock.commit();
++  }
++  const ids = (await Promise.all(result)).map((data) => data.id);
++  assert.equal(new Set(ids).size, 1);
++  assert.equal(listHonkerJobs("playlist-mbid-enrichment").length, 1);
++});
++
+ test.after(async () => {
+   await cleanupIsolatedState(isolatedState);
+ });
+@@ -97,7 +149,7 @@ test("enrichStaticPlaylistMbids fills missing playlist and job MBIDs", async ()
+   assert.equal(storedJob.albumTrackCount, 12);
+ });
+ 
+-test("enrichStaticPlaylistMbids rescans the library after updating a downloaded job", async (t) => {
++test("enrichment scans only affected downloaded files and never requests a full scan", async (t) => {
+   const playlist = flowPlaylistConfig.createStaticPlaylist({
+     name: "Downloaded",
+     tracks: [{ artistName: "Refused", trackName: "New Noise" }],
+@@ -122,7 +174,26 @@ test("enrichStaticPlaylistMbids rescans the library after updating a downloaded
+     }),
+   });
+ 
+-  assert.equal(scheduleScanLibrary.mock.callCount(), 1);
++  assert.equal(scheduleScanLibrary.mock.callCount(), 0);
++  const scans = listHonkerJobs("library-scan");
++  assert.equal(scans.length, 1);
++  const payload = scans[0].payload;
++  assert.deepEqual(payload.changedPaths, ["/library/Refused/New Noise.flac"]);
++  assert.equal(payload.includeLidarr, false);
++  getLibraryScanQueue().cancel(scans[0].id);
++});
++
++test("enriching pending tracks does not scan the filesystem", async () => {
++  const playlist = flowPlaylistConfig.createStaticPlaylist({
++    name: "Pending metadata",
++    tracks: [{ artistName: "Refused", trackName: "New Noise" }],
++  });
++  downloadTracker.addJob({ artistName: "Refused", trackName: "New Noise" }, playlist.id);
++  const result = await enrichStaticPlaylistMbids(playlist.id, {
++    resolveTrackContext: (track) => ({ ...track, artistMbid: "artist-refused", albumMbid: "album-shape", trackMbid: "track-new-noise" }),
++  });
++  assert.equal(result.changed, true);
++  assert.equal(listHonkerJobs("library-scan").length, 0);
+ });
+ 
+ test("enrichStaticPlaylistMbids returns missing when playlistId is empty", async () => {
+diff --git a/.tests/track-matching/post-download.test.js b/.tests/track-matching/post-download.test.js
+index fbe3b7c4..c54f7d59 100644
+--- a/.tests/track-matching/post-download.test.js
++++ b/.tests/track-matching/post-download.test.js
+@@ -505,6 +505,31 @@ test("each artist in a multi-artist credit is artist evidence, with or without a
+   assert.equal((await validate("Drake, Rick Ross", "soulseek")).decision, POST_DOWNLOAD_DECISIONS.CONFLICTED);
+ });
+ 
++test("combined requested credits need corroboration for every collaborator", async () => {
++  const validate = (artist, title, filename, source = "soulseek") => validateDownloadedTrackFile({
++    request: { artistName: "Megan Thee Stallion & Dua Lipa", trackName: "Sweetest Pie", durationMs: 200000 },
++    candidate: { provider: { id: "abc123DEF45", uploader: "Megan Thee Stallion" }, raw: { title } },
++    filePath: `/staging/${filename}`,
++    source,
++    options: { parseFile: stubParseFile(stubParsed({ title, artist }, 200,
++      { lossless: false, bitrate: 256000, container: "MPEG-4", codec: "AAC" })) },
++  });
++  assert.equal((await validate("Megan Thee Stallion", "Sweetest Pie", "18 Sweetest Pie (Feat. Dua Lipa).mp3")).decision,
++    POST_DOWNLOAD_DECISIONS.VERIFIED);
++  assert.equal((await validate("Megan Thee Stallion", "Sweetest Pie (Feat. Dua Lipa)", "abc123DEF45.m4a", "ytdlp")).decision,
++    POST_DOWNLOAD_DECISIONS.VERIFIED);
++  assert.equal((await validate("Megan Thee Stallion & Dua Lipa", "Sweetest Pie", "Sweetest Pie.mp3")).decision,
++    POST_DOWNLOAD_DECISIONS.VERIFIED);
++  assert.notEqual((await validate("Megan Thee Stallion", "Sweetest Pie", "Sweetest Pie.mp3")).decision,
++    POST_DOWNLOAD_DECISIONS.VERIFIED, "lead credit alone must not prove the collaboration");
++  assert.notEqual((await validate("Unrelated Artist", "Sweetest Pie (Feat. Dua Lipa)", "Sweetest Pie.mp3")).decision,
++    POST_DOWNLOAD_DECISIONS.VERIFIED);
++  assert.notEqual((await validate("Unrelated Artist", "Sweetest Pie (Feat. Megan Thee Stallion & Dua Lipa)", "Sweetest Pie.mp3")).decision,
++    POST_DOWNLOAD_DECISIONS.VERIFIED, "featured names must not override an unrelated performer tag");
++  assert.notEqual((await validate("Megan Thee Stallion", "Sweetest Pie (Remix) (Feat. Dua Lipa)", "Sweetest Pie.mp3")).decision,
++    POST_DOWNLOAD_DECISIONS.VERIFIED, "matching collaborators must not override a remix conflict");
++});
++
+ test("review reasons name every missing piece of recording evidence", async () => {
+   const validate = (artist) => validateDownloadedTrackFile({
+     request: GET_LUCKY,
+diff --git a/backend/services/honkerDb.js b/backend/services/honkerDb.js
+index 6e4f6deb..19716272 100644
+--- a/backend/services/honkerDb.js
++++ b/backend/services/honkerDb.js
+@@ -222,6 +222,7 @@ function createHonkerQueue({
+   workerStartFn,
+   defaultPriorityFn = (payload, options) => Number(options.priority || 0),
+   skipInTest = false,
++  coalescePlaylistEnrichment = false,
+ }) {
+   let queue = null;
+ 
+@@ -236,7 +237,34 @@ function createHonkerQueue({
+     const q = getQueue();
+     const runAt = resolveEnqueueRunAt(options);
+     const priority = defaultPriorityFn(payload, options);
+-    const jobId = q.enqueue(payload, { priority, runAt });
++    let jobId;
++    if (coalescePlaylistEnrichment && payload?.kind === "playlist-mbid-enrichment" && payload.playlistId) {
++      const tx = getHonkerDb().transaction();
++      try {
++        const [pending] = tx.query(`SELECT id, payload FROM _honker_live
++          WHERE queue = ? AND state = 'pending'
++            AND json_extract(payload, '$.kind') = 'playlist-mbid-enrichment'
++            AND json_extract(payload, '$.playlistId') = ? ORDER BY id LIMIT 1`,
++        [name, String(payload.playlistId)]);
++        if (pending) {
++          const previous = parseHonkerPayload(pending.payload) || {};
++          const merged = { ...previous,
++            reconcileArtistMbids: previous.reconcileArtistMbids === true || payload.reconcileArtistMbids === true };
++          tx.execute(`UPDATE _honker_live SET payload = ?, priority = MAX(priority, ?), run_at = MIN(run_at, ?)
++            WHERE id = ? AND state = 'pending'`,
++          [JSON.stringify(merged), priority, runAt ?? Math.floor(Date.now() / 1000), pending.id]);
++          jobId = pending.id;
++        } else {
++          jobId = q.enqueueTx(tx, payload, { priority, runAt });
++        }
++        tx.commit();
++      } catch (error) {
++        try { tx.rollback(); } catch {}
++        throw error;
++      }
++    } else {
++      jobId = q.enqueue(payload, { priority, runAt });
++    }
+     if (shouldStartQueueHere(name) && !(skipInTest && process.env.NODE_ENV === "test")) {
+       import(workerModule)
+         .then((mod) => mod[workerStartFn]())
+@@ -316,6 +344,7 @@ const playlistMbidEnrichment = registerQueue({
+   workerModule: "./playlistMbidEnrichmentWorker.js",
+   workerStartFn: "startPlaylistMbidEnrichmentWorker",
+   skipInTest: true,
++  coalescePlaylistEnrichment: true,
+ });
+ 
+ export const getPlaylistMbidEnrichmentQueue = playlistMbidEnrichment.getQueue;
+diff --git a/backend/services/libraryScanWorker.js b/backend/services/libraryScanWorker.js
+index 3423690f..51cc43d5 100644
+--- a/backend/services/libraryScanWorker.js
++++ b/backend/services/libraryScanWorker.js
+@@ -2,7 +2,7 @@ import path from "node:path";
+ import createHonkerWorker from "./honkerWorkerFactory.js";
+ import { db, dbHelpers } from "../config/db-sqlite.js";
+ import { dbOps } from "../db/helpers/index.js";
+-import { enqueueLibraryScanJob, getLibraryScanQueue } from "./honkerDb.js";
++import { enqueueLibraryScanJob, getLibraryScanQueue, getHonkerDb } from "./honkerDb.js";
+ import { isHonkerDatabaseClosedError } from "./honkerWorkerRuntime.js";
+ import { resolveLibraryScanChangedPaths } from "./libraryScanRequest.js";
+ import { scheduleReleaseMetadataRefresh } from "./releaseMetadataSync.js";
+@@ -11,6 +11,7 @@ import { websocketService } from "./websocketService.js";
+ const WORKER_NAME = "library-scan";
+ const LIBRARY_SCAN_REGISTRY_KEY = "pendingLibraryScanJob";
+ const MAX_CHANGED_PATHS = 4096;
++const INCREMENTAL_SCAN_BATCH_SECONDS = 30;
+ const scanRegistryValueStmt = db.prepare("SELECT value FROM settings WHERE key = ?");
+ const insertScanRegistryStmt = db.prepare(
+   "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
+@@ -161,7 +162,20 @@ function registerLibraryScan({
+       setScanRegistry(nextRegistry);
+       return true;
+     }).immediate();
+-    if (updated) return existingJobId;
++    if (updated) {
++      if (fullScanRequested) {
++        const tx = getHonkerDb().transaction();
++        try {
++          tx.execute("UPDATE _honker_live SET run_at = MIN(run_at, ?) WHERE id = ? AND state = 'pending'",
++            [Math.floor(Date.now() / 1000), existingJobId]);
++          tx.commit();
++        } catch (error) {
++          try { tx.rollback(); } catch {}
++          throw error;
++        }
++      }
++      return existingJobId;
++    }
+     return registerLibraryScan({ force, includeLidarr, changedPaths });
+   }
+   const recoveredPaths = registry.inFlightActive === true && Array.isArray(registry.inFlightPaths)
+@@ -187,7 +201,7 @@ function registerLibraryScan({
+     force: effectiveForce,
+     includeLidarr: effectiveIncludeLidarr,
+     changedPaths: fullScan ? null : effectivePaths,
+-  });
++  }, { delaySeconds: fullScan || effectiveForce ? 0 : INCREMENTAL_SCAN_BATCH_SECONDS });
+   const nextRegistry = { jobId, includeLidarr: effectiveIncludeLidarr };
+   if (effectiveForce) nextRegistry.force = true;
+   if (!fullScan) nextRegistry.changedPaths = effectivePaths;
+diff --git a/backend/services/playlistMbidEnrichmentService.js b/backend/services/playlistMbidEnrichmentService.js
+index 10bcd2d8..9059c1cd 100644
+--- a/backend/services/playlistMbidEnrichmentService.js
++++ b/backend/services/playlistMbidEnrichmentService.js
+@@ -302,6 +302,7 @@ export async function enrichStaticPlaylistMbids(
+       const jobs = downloadTracker.getByPlaylistType(safePlaylistId);
+       let jobsUpdated = 0;
+       const updatedJobIds = new Set();
++      const changedFilePaths = new Set();
+       for (const track of nextTracks) {
+         const resolution = resolutions.find(
+           (entry) =>
+@@ -318,13 +319,17 @@ export async function enrichStaticPlaylistMbids(
+           if (downloadTracker.updateMetadata(job.id, patch)) {
+             jobsUpdated += 1;
+             updatedJobIds.add(job.id);
++            if (job.status === "done" && job.finalPath) changedFilePaths.add(job.finalPath);
+           }
+         }
+       }
+ 
+       if (playlistTracksUpdated > 0 || jobsUpdated > 0) {
+         playlistManager.updateConfig();
+-        playlistManager.scheduleScanLibrary();
++        if (changedFilePaths.size > 0) {
++          const { scheduleLibraryScan } = await import("./libraryScanWorker.js");
++          scheduleLibraryScan({ includeLidarr: false, changedPaths: [...changedFilePaths] });
++        }
+       }
+ 
+       return {
+diff --git a/backend/services/trackMatching/nativeMatcher.js b/backend/services/trackMatching/nativeMatcher.js
+index 8c621341..0765a229 100644
+--- a/backend/services/trackMatching/nativeMatcher.js
++++ b/backend/services/trackMatching/nativeMatcher.js
+@@ -116,7 +116,7 @@ function coreArtist(name) {
+ 
+ // "Kendrick Lamar, Drake" and "Blue Swede & Björn Skifs" credit each of
+ // their artists. "AC/DC" has no spaces around its slash and stays whole.
+-function creditedArtists(credit) {
++export function creditedArtists(credit) {
+   const whole = coreArtist(credit);
+   const parts = whole.split(/\s*[,;]\s*|\s+(?:&|\/|x|×)\s+/iu).map((part) => part.trim()).filter(Boolean);
+   return [...new Set([whole, ...parts])];
+@@ -138,6 +138,32 @@ function keyedArtistSimilarity(requestedKeys, credits) {
+     Math.max(keySimilarity(left, right), keySimilarity(leftJoined, rightJoined)))));
+ }
+ 
++function corroboratedArtistSimilarity(prepared, candidate) {
++  const credits = asNames(candidate.artists || candidate.artist);
++  const direct = keyedArtistSimilarity(prepared.performerKeys, credits);
++  if (direct == null || direct >= MATCH_POLICY.minArtistSimilarity) return direct;
++  // A collaboration may be tagged with only its lead performer, with the
++  // other credit in "(feat. ...)". Require evidence for EVERY requested
++  // collaborator; splitting the request alone would admit solo recordings.
++  const titles = [candidate.title, candidate.versionTitle, candidate.fileNameTitle,
++    String(candidate.filename || "").replace(/\.[a-z0-9]+$/iu, ""), ...credits].filter(Boolean);
++  const featured = titles.flatMap((title) => [...String(title).matchAll(/\b(?:feat\.?|ft\.?|featuring)\s+([^()[\]]+)/giu)]
++    .map((match) => match[1].trim()));
++  const evidence = [...credits, ...featured];
++  for (const credit of prepared.performerCredits || []) {
++    const parts = [...new Set(coreArtist(credit).split(/\s*[,;]\s*|\s+(?:&|\/|x|×)\s+/iu)
++      .map((part) => part.trim()).filter(Boolean))];
++    if (parts.length < 2) continue;
++    if (!parts.some((part) => (keyedArtistSimilarity([artistKeys(part)], credits) ?? 0)
++      >= MATCH_POLICY.minArtistSimilarity)) continue;
++    const scores = parts.map((part) => keyedArtistSimilarity([artistKeys(part)], evidence));
++    if (scores.every((score) => score != null && score >= MATCH_POLICY.minArtistSimilarity)) {
++      return Math.max(direct, Math.min(...scores));
++    }
++  }
++  return direct;
++}
++
+ const requestedArtistKeys = (names) => asNames(names).filter((name) => !isVariousArtistsCredit(name))
+   .map((name) => artistKeys(coreArtist(name)));
+ 
+@@ -177,6 +203,7 @@ export function prepareRecordingRequest(request) {
+     }),
+     titleKey: titleKey(request.title),
+     performerKeys: requestedArtistKeys(requestPerformers(request)),
++    performerCredits: requestPerformers(request),
+   };
+ }
+ 
+@@ -235,7 +262,7 @@ export function compareRecording(request, candidate, policy = MATCH_POLICY, prep
+     durationMs: candidateDuration, trackTitle: request.title }) != null) contradictions.push("implausible-file");
+ 
+   const title = keySimilarity(prepared.titleKey, titleKey(candidate.title));
+-  const artist = keyedArtistSimilarity(prepared.performerKeys, candidate.artists || candidate.artist);
++  const artist = corroboratedArtistSimilarity(prepared, candidate);
+   if (artist != null && artist < policy.minArtistNonConflictSimilarity) contradictions.push("artist");
+   const evidence = [];
+   if (sameRecording) evidence.push("recording-mbid");
+diff --git a/backend/services/trackMatching/youtubeEvidence.js b/backend/services/trackMatching/youtubeEvidence.js
+index 898759b1..be04dbda 100644
+--- a/backend/services/trackMatching/youtubeEvidence.js
++++ b/backend/services/trackMatching/youtubeEvidence.js
+@@ -1,6 +1,6 @@
+ import { splitArtistTitleSegments } from "./candidateNormalizer.js";
+ import { isPromoGroup, stripPromoDescriptors } from "./semanticPolicy.js";
+-import { bestArtistSimilarity, isSameAlbumTitle, MATCH_POLICY, normalizeMatchText, titleSimilarity } from "./nativeMatcher.js";
++import { bestArtistSimilarity, creditedArtists, isSameAlbumTitle, MATCH_POLICY, normalizeMatchText, titleSimilarity } from "./nativeMatcher.js";
+ import { coreAlbumTitle } from "./titleText.js";
+ 
+ const VIDEO_WORDS = /\b(?:video|mv|clip)\b/iu;
+@@ -22,7 +22,9 @@ function channelArtistName(channel) {
+ // differently.
+ export function readYoutubeUpload(title, channel, artistNames) {
+   const channelArtist = channelArtistName(channel);
+-  const artistChannel = (bestArtistSimilarity(artistNames, channelArtist) ?? 0)
++  // A collaboration can be uploaded on one credited performer's channel.
++  // File verification still requires evidence for every requested credit.
++  const artistChannel = (bestArtistSimilarity(artistNames.flatMap(creditedArtists), channelArtist) ?? 0)
+     >= MATCH_POLICY.minArtistSimilarity;
+   return {
+     channelArtist: artistChannel ? channelArtist : null,
+diff --git a/.tests/fixtures/metadata-enrichment-caller.mjs b/.tests/fixtures/metadata-enrichment-caller.mjs
+new file mode 100644
+index 00000000..aa4e1a65
+--- /dev/null
++++ b/.tests/fixtures/metadata-enrichment-caller.mjs
+@@ -0,0 +1,9 @@
++import { enqueuePlaylistMbidEnrichmentJob, getHonkerDb } from "../../backend/services/honkerDb.js";
++
++getHonkerDb().query("SELECT 1");
++process.on("message", ({ playlistId }) => {
++  process.send({ type: "calling" });
++  const id = enqueuePlaylistMbidEnrichmentJob({ kind: "playlist-mbid-enrichment", playlistId }, { delaySeconds: 20 });
++  process.send({ type: "result", id }, () => process.exit(0));
++});
++process.send({ type: "ready" });
