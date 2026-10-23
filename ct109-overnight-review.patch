@@ -1,0 +1,83 @@
+diff --git a/.tests/news-service.test.js b/.tests/news-service.test.js
+index 4f6fa243..0e40a715 100644
+--- a/.tests/news-service.test.js
++++ b/.tests/news-service.test.js
+@@ -72,6 +72,28 @@ const story = (title, extra = {}) => ({
+ const getTitles = async (options) =>
+   (await newsService.getNewsForUser({ userId: null, limit: 100, ...options })).articles.map(({ title }) => title);
+ 
++test("disabled news leaves cached articles untouched and makes no network requests", async (t) => {
++  configureFeeds([TAGGED_FEED]);
++  // Include an expired article awaiting its image: both housekeeping and
++  // image fetching must stop when the integration is disabled.
++  db.prepare(`INSERT INTO news_articles
++    (id, source_url, source, url, title, description, categories, image_checked, published_at)
++    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
++    .run("retained", TAGGED_FEED, "Test", "https://news.test/retained", "Retained", "", "[]", 0, Date.now() - 40 * DAY_MS);
++  const before = db.prepare("SELECT * FROM news_articles").all();
++  const settings = dbOps.getSettings();
++  dbOps.updateSettings({ integrations: {
++    ...settings.integrations,
++    news: { ...settings.integrations.news, enabled: false },
++  } });
++  const requests = t.mock.method(axios, "get", async () => {
++    throw new Error("Disabled news must not fetch feeds or article images");
++  });
++  await newsService.refreshNewsFeeds();
++  assert.equal(requests.mock.callCount(), 0);
++  assert.deepEqual(db.prepare("SELECT * FROM news_articles").all(), before);
++});
++
+ test("parses RSS items, Atom entries, entities, categories, and images", () => {
+   const articles = rssNews.parseRssFeed(`
+     <rss xmlns:media="http://search.yahoo.com/mrss/"><channel><title>Example Music</title><item>
+diff --git a/backend/services/newsService.js b/backend/services/newsService.js
+index cf0244ba..68bf0ade 100644
+--- a/backend/services/newsService.js
++++ b/backend/services/newsService.js
+@@ -213,6 +213,9 @@ async function lookupMissingImages() {
+ 
+ export async function refreshNewsFeeds() {
+   const settings = getNewsSettings();
++  // Disabled news must also skip retained-article maintenance and image
++  // lookups; an empty feed list alone still performs that work.
++  if (!settings.enabled) return;
+   const feeds = getEnabledFeeds(settings);
+   const results = await mapWithConcurrency(feeds, 3, async (feed) => {
+     try {
+diff --git a/frontend/src/components/UserProfileMenu.jsx b/frontend/src/components/UserProfileMenu.jsx
+index e0b1b04e..773eac15 100644
+--- a/frontend/src/components/UserProfileMenu.jsx
++++ b/frontend/src/components/UserProfileMenu.jsx
+@@ -16,7 +16,9 @@ function UserProfileMenu() {
+   const [menuOpen, setMenuOpen] = useState(false);
+   const menuRef = useRef(null);
+   const triggerRef = useRef(null);
+-  const { authRequired, canLogOut, logout } = useAuth();
++  const { authRequired, canLogOut, logout, user } = useAuth();
++  const username = String(user?.username || "").trim();
++  const initial = Array.from(username)[0]?.toUpperCase() || "";
+ 
+   useEffect(() => {
+     if (!menuOpen) return undefined;
+@@ -45,14 +47,18 @@ function UserProfileMenu() {
+     <div ref={menuRef} className="app-profile-menu">
+       <TooltipButton
+         ref={triggerRef}
+-        label="User menu"
++        label={username ? `User menu: signed in as ${username}` : "User menu"}
+         onClick={() => setMenuOpen((open) => !open)}
+         className={`app-header-link app-profile-menu__trigger${menuOpen ? " is-open" : ""}`}
+         aria-haspopup="menu"
+         aria-expanded={menuOpen}
+       >
+         <span className="app-profile-menu__icon" aria-hidden="true">
+-          <User />
++          {initial ? (
++            <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>{initial}</span>
++          ) : (
++            <User />
++          )}
+         </span>
+       </TooltipButton>
+ 
