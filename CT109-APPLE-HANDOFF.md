@@ -1,93 +1,66 @@
-# CT109 Apple Music integration: resume here
+# Resume Apple Music integration here — October 25
 
-## User-confirmed facts — do not repeat discovery
+## Current outcome
 
-The prior Apple Music POC worked for multiple users. Both spouses imported their playlists successfully through the earlier development/v3 instance, and those playlists are present in current v2.11 CT109. Import correctness and multi-user feasibility are established by the user's actual tests.
+The hosted Connect Apple Music preview is implemented and packaged. It is not yet installed on CT109 and live Apple acceptance in the hosted Linux browser remains unverified. The old POC's actual multi-user importing already works; do not repeat that investigation.
 
-The next test is specifically the **Connect Apple Music hosted-browser authentication and cleanup**, not whether playlist importing works. The user prefers an OS-independent popup from Aurral, with no Windows helper, no manual token copying and no continuously running browser. Place the Apple Music section between Connected accounts and Plex account in the individual Profile.
+The user prefers installation **inside CT109**, not a required second container. The earlier separate-container proposal was a resource recommendation, not a requirement, and was corrected. The default deploy.py installs both service and profile UI into CT109. Optional --browser-ct supports a separate Debian CT.
 
-Do not restore the abandoned dev/v3 application wholesale. Port the necessary integration into the clean v2.11 patch stack. Do not repeat broad profiling or ask the user to stay up for interactive testing. No Apple feature has been installed or implemented in this session.
+Release: aurral-apple-connect-preview.zip on the artifacts/aurral-baseline branch of sud0-odus/aurral-dev. The ZIP contains all source, prebuilt frontend, checksums, root deployer, service installer, application installer, rollback, tests and instructions. See README.md and VALIDATION.md in that release.
 
-## Current deployment and acquisition work
+Cloud paths:
+- /workspace/apple-connect-release (assembled release)
+- /workspace/apple-browser-kit (browser service source and tests)
+- /workspace/ct109-apple-connect (guarded app installer and payload)
+- /workspace/aurral-dev (current v2.11 source, all earlier patch source changes preserved)
 
-CT109 is the target: Proxmox, two CPUs, 4 GiB RAM; native app /opt/aurral, DB /opt/aurral_data/aurral.db, service aurral. Browser should run as a separate, explicitly bounded on-demand service; deployment location is not yet selected or provisioned. Do not install a browser directly onto the Proxmox host.
+The user has authorized this work; there is no need to ask for approval again to prepare/fix the implementation. Production execution still requires their Proxmox console; no cloud-to-N100S session is available.
 
-Latest delivered source-lane kit (patch 6), immutable commit:
-`b5baa8373d5bd7b66fdd77b5ca1e4dbebbe3f2ac`
-`aurral-ct109-source-lanes-patch.zip`
-SHA256: `75be7b4978d28a0345d45da4200326b12d0e66b3fe0d6d7cae1748e5735a40bc`
+## Implemented flow and limits
 
-Public URL:
-https://raw.githubusercontent.com/sud0-odus/aurral-dev/b5baa8373d5bd7b66fdd77b5ca1e4dbebbe3f2ac/aurral-ct109-source-lanes-patch.zip
+Profile section between Connected accounts and Plex account. Connect opens same-origin popup displaying remote screenshots, forwards pointer/keyboard/paste/scroll input through authenticated Aurral endpoints to an on-demand headed Chromium/Xvfb session. Masked native text input also supports touch/paste. These are server-rendered browser pixels, not a client-side Apple iframe or an assumed Apple OAuth handoff.
 
-This kit was built, published and its public download verified. Installation instructions and detached eight-hour profiler were delivered, but the user has NOT confirmed installing/enabling patch 6 or starting that profile. Do not claim CT109 has it. Existing library-boundary UI was observed in user output (patch 5).
+POST /api/users/me/apple-music/connect binds the attempt to req.user.id. User IDs supplied in bodies are ignored. No Apple cookies/tokens, browser service key or Aurral token is placed in the popup. Captured headers stay in service RAM, separated by Aurral user, for up to one hour. Closing/canceling an in-flight popup cancels its capture; older cancellation cannot remove a newer connection.
 
-Cloud source: /workspace/aurral-dev on perf/download-pipeline-v2.11.0. Existing patch 1–6 source/test changes remain uncommitted in the working tree. Preserve them. All previous kits and test logs remain under /workspace and /tmp. Source-lane kit: /workspace/ct109-source-lanes. Production source is also preserved in published kit payloads. Broad 903 tests passed; later targeted 82/60/10 tests overlap, 34 Python kit tests passed, actual payload install/enable/rollback smoke passed. No remote production execution was possible from cloud.
+The service verifies a personal-library GET before claiming connection, then closes Chromium/Playwright/Xvfb and removes its temporary browser profile. It reports connected only after cleanup. It supports a read-only complete personal-playlist inventory with source IDs and original artwork metadata. No imports, download jobs or discovery changes are performed by this preview.
 
-## Proven POC source
+Runtime service: aurral-apple-browser.service, dedicated non-root user. Default bind 127.0.0.1:3334; HTTPS with privately paired CA/service key. MemoryMax=1024M, CPUQuota=50%, MemorySwapMax=0, one active browser. Refuses a start below 1.25 GiB CT headroom (including reclaimable inactive file cache). Ten-minute sign-in deadline; 90-second abandoned-client timeout; 15-second cleanup watchdog can kill its own driver/browser tree. Systemd kills its entire cgroup on service stop/OOM.
 
-Repository: sud0-odus/aurral-dev, branch dev/youtube-source-matching (also local `work`).
-Checkpoint: `520c1a7198e27684931446dcd8fcb87878e5a0b7` (Apple import refinements/sharing).
-Earlier relevant commits: 3b97263b, 7e7f543d, 3ebeb3ab, 6e44cc9c, 6fb3ae8a, 04b38cf1, 95fb9c65.
+No Windows helper is needed. One-time administrator pairing is automatic; do not ask users to copy Apple tokens. It does not install Chromium on the Proxmox host.
 
-Read these with git show; do not checkout over the v2.11 working tree:
-- apple-poc/aurral-apple-poc.py
-- apple-poc/aurral-apple-poc.service
-- backend/routes/playlists/handlers/appleMusicPoc.js
-- frontend/src/pages/Settings/components/AppleMusicPocModal.jsx
-- backend/routes/playlists/handlers/staticPlaylists.js
+## Deployment
 
-Existing bridge ties sessions to backend-authenticated `X-Aurral-User-Id`, accepts only loopback callers, stores temporary headers in memory per user, expires them after an hour and clears them on disconnect. Recommendations, personal library playlists, paging, duplicate-name lookup, track comparison and selective missing restoration were implemented. Reuse these working behaviors.
+On Proxmox N100S, download/extract the release under /root/aurral-apple-connect-preview, then:
 
-Cleanup/refinement findings:
-- Bridge normalizes playlist/track data and drops artwork; import payload also drops Apple playlist identifiers and original artwork.
-- Old bridge contains deployment-specific loopback port, certificate paths and legacy app addresses. Make service location/configuration explicit when porting; do not copy these assumptions into CT109.
-- Preserve pagination/incomplete-import safeguards and user ownership.
-- Existing duplicate lookup is name-based; retaining source IDs would permit stronger matching for future imports. Existing playlists need a reviewed matching/backfill procedure, not blind reimport.
+python3 /root/aurral-apple-connect-preview/deploy.py --check
+python3 /root/aurral-apple-connect-preview/deploy.py --install
 
-## Identified Apple MCP implementation
+No CT number/IP is needed for the default shared-CT109 deployment. The check stages /tmp payloads, checks Debian/resources and exact source compatibility. Install adds dependencies/service while Aurral stays running, pairs it privately over loopback, then pauses Aurral only for backup and guarded code/UI install. Existing queue rows/settings are not reset; health/matcher verification gates resume.
 
-Confirmed from PyPI metadata, not guessed:
-https://github.com/epheterson/applemusic-mcp
-Python package applemusic-mcp; inspected current release 0.21.0 without installing it in cloud.
+The application patch is compatible with current patch-5 or patch-6 acquisition source. It changes users.js and SettingsAccountTab.jsx, adds the Node client, user routes and frontend section, and guards the installed Library boundary module. It does not overwrite acquisition files. Rollback restores old app source/UI, retains current database work and stops the browser service. Packages/private pairing configuration are kept but inactive.
 
-User Windows installation:
-`%APPDATA%\Python\Python312\Scripts\applemusic-mcp.exe`
-Commands login, status, serve. Python function `from applemusic_mcp.server import get_headers`.
-User status confirmed: User token present; API ok (web session), no paid developer token used. Do not request tokens in chat.
+Read /root/aurral-apple-deploy.log for installer failures. Browser journal prints only lifecycle/error class, not input/headers/raw responses. Do not publish runtime credentials or users' Apple inventory reports.
 
-Inspected package source: /tmp/applemusic-mcp-source-review/applemusic_mcp.
-Browser engine uses Playwright persistent Chrome context with headless=False. It is already cross-platform, but interactive hosted Linux sign-in has NOT been verified. Need virtual display + browser viewing/control and authenticated popup/session orchestration. Opening an ordinary client-side Apple popup alone does not give Aurral access to its credentials; Plex uses a different provider authorization mechanism. Reuse Plex's UX, not an assumed interchangeable authentication API.
+## Verification already completed
 
-## Artwork evidence
+15 Python browser lifecycle/isolation/admission tests; 9 Node API/TLS tests; 56 auth/history/acquisition regressions (overlap); 21 application-installer/pairing tests; 4 deployment-target validation tests. Actual source/frontend payload install/enable/rollback exercised against a temporary application with mocked service/health; post-patch database work preserved. Frontend build and scoped lint passed. Real Chromium remote input/screenshots/temp-profile cleanup passed in cloud headless mode. UI fixture exercised open/input/success/close/cancel/disconnect/metadata and showed zero page errors. These do not establish successful Apple sign-in on CT109.
 
-User uploaded apple-artwork-check.json from a bounded authenticated read-only Windows check: 14 personal playlists, no further page; 8 list entries have artwork URLs. All first three playlist detail samples have covers; all 15 sampled track entries have artwork. Six other list entries lack covers; their detail endpoints were not sampled, so don't claim artwork is unavailable. Report contains private user playlist names; do not publish it.
+Do not claim Proxmox package/service installation or actual headed Linux Apple sign-in is verified before the user's live test. If it fails, investigate this new session capture/viewer/cleanup boundary, not whether the proven Apple playlist API import exists.
 
-Private local file:
-/workspace/attachments/e536b166-8e44-433c-a8c5-ed12db256d16/apple-artwork-check.json
+## User goals and subsequent work
 
-Deezer importer already obtains picture_xl/picture_big but import flow drops artwork. User wants original covers for both providers; keep manual custom covers highest precedence, provider covers next, track-album collage fallback. No cover patch implemented yet.
+The main product goal is per-user discovery seeded by existing streaming-service interests without requiring prior scrobbling. Old Apple importer already worked for both spouses; many existing wife-owned playlists were imported from Apple through the retired development/v3 setup and carried into v2.11.
 
-## Personal recommendations requirement
+After verifying the new popup: port the proven import UX and user-owned source IDs/artwork; add durable per-user imported taste records; wire discovery to these records. Imported interests must survive scheduled refresh, cache clearing and the existing More/Less-feedback reset; removal requires a separate explicit action. Metadata-only preference import must not trigger music acquisition. Do not fabricate play history from playlists. Household library taste sampling should be explicit.
 
-Main product goal is independent per-user taste without requiring prior scrobbling knowledge/history. Imported interests must be useful without downloading the entire source collection. Separate metadata/taste imports from optional playlist acquisition.
+Current v2.11 collectUserSeeds always samples shared-library artists alongside per-user history/feedback. This causes household/admin collection influence; it is not literal admin-account impersonation. Per-user caches alone do not fix the input problem.
 
-Current v2.11 discovery has per-user caches/history/feedback, but collectUserSeeds in backend/services/discovery/provider.js always mixes in shared-library artists. selectDiscoverySeeds in recommendationPipeline.js allocates library capacity even with some history. Thus users can see recommendations influenced heavily by the household/admin-imported collection; code does not literally assign the admin account as their identity.
+Known POC source checkpoint: 520c1a7198e27684931446dcd8fcb87878e5a0b7, local work / origin/dev/youtube-source-matching. Relevant source: apple-poc/aurral-apple-poc.py, backend/routes/playlists/handlers/appleMusicPoc.js, frontend/src/pages/Settings/components/AppleMusicPocModal.jsx. Proven bridge uses loopback authenticated backend identity, per-user in-memory headers with one-hour TTL, paging, duplicate checks, track comparison and selective missing restore. Its normalization/import payloads drop artwork/source identifiers; retain/fix these when porting. Do not restore the old dev/v3 application wholesale.
 
-Need durable user-owned imported taste/source records separate from disposable recommendation caches. Personal signals should drive recommendations; household library seeding should be explicit. Preserve existing manual preferences/listening history. Saved music, curated recommendations and actual listening are distinct evidence; do not fabricate plays.
+Apple MCP is https://github.com/epheterson/applemusic-mcp (PyPI applemusic-mcp; inspected 0.21.0). Windows get_headers/status session worked without paid developer token. The hosted bridge follows web-player Authorization and media-user-token capture and validates them against amp-api.music.apple.com. It needs actual Apple acceptance tested in the new browser.
 
-Verified reset paths:
-- Scheduled refresh rebuilds recommendation caches.
-- /discover/clear-discovery clears global and user caches.
-- /discover/feedback/reset removes current user's More/Less feedback, retaining blocked artists.
-Imported source interests should survive refresh/cache clearing and the existing manual-feedback reset. Removing/resetting imported interests requires an explicit separate action. User A's import/reset/disconnect must not change user B's interests.
+Artwork report privately showed 14 personal playlists, 8 with covers in list responses; first 3 detailed playlists had covers and all 15 sampled tracks had artwork. Six other list entries lacked artwork; their details were not sampled. Do not declare their covers unavailable. Deezer importer already reads picture_xl/picture_big but drops it during import. Cover priority: preserve manual images, source originals next, album collage fallback. No original-cover/backfill patch delivered yet.
 
-## Resume scope
+Other providers later: existing public YouTube/YouTube Music playlist import and Spotify authorization/import should feed the same personal taste model. Private YouTube likes/mixes need authenticated access. Avoid blanket claims that Spotify metadata access is behind a paywall.
 
-1. Reuse proven POC; build/test the on-demand hosted-browser Connect Apple Music flow, keyed to the initiating authenticated Aurral user. Close browser on success/cancel/failure/timeout; cap concurrent sessions and resources; no credential output.
-2. Keep authentication-session expiry separate from durable imported tastes/artwork. Successful login is not yet a completed taste import.
-3. Integrate Profile UI at the agreed placement and retain proven import features, adding source IDs/artwork.
-4. Connect user-owned taste inputs to recommendation rebuilding with reset/refresh/restart and cross-user isolation tests.
-5. Reuse existing public YouTube/YouTube Music playlist and Spotify OAuth importers for the same taste system later. Private YouTube likes/mixes need separate authenticated access. Do not describe all Spotify metadata access as a simple paywall; verify exact app/account eligibility when that work is reached.
-
-No new production changes, browser deployment, or Apple connection work was completed during this review. Next session should resume implementation at authentication orchestration, not ask the user to demonstrate the old importer again.
+Prior acquisition patch 6 ZIP was published at b5baa8373d5bd7b66fdd77b5ca1e4dbebbe3f2ac but user has not confirmed installing/enabling or running its overnight profile. Do not assume that production state. Preserve all prior v2.11 patch work.
